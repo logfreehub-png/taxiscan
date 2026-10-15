@@ -1,0 +1,118 @@
+{
+  "expo": {
+    "name": "TaxiScan",
+    "slug": "taxiscan",
+    "version": "1.0.0",
+    "scheme": "taxiscan",
+    "icon": "./assets/icon.png",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "backgroundColor": "#000000",
+      "resizeMode": "contain"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "uz.taxiscan.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Joylashuvingiz hozirgi joydagi taksi narxlarini hisoblash uchun ishlatiladi."
+      }
+    },
+    "android": {
+      "package": "uz.taxiscan.app",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "geo"
+            }
+          ],
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ]
+        },
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "https",
+              "host": "maps.google.com"
+            },
+            {
+              "scheme": "http",
+              "host": "maps.google.com"
+            },
+            {
+              "scheme": "https",
+              "host": "*.google.com",
+              "pathPrefix": "/maps"
+            }
+          ],
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ]
+        },
+        {
+          "action": "VIEW",
+          "data": [
+            {
+              "scheme": "https",
+              "host": "yandex.uz",
+              "pathPrefix": "/maps"
+            },
+            {
+              "scheme": "https",
+              "host": "yandex.ru",
+              "pathPrefix": "/maps"
+            }
+          ],
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ]
+        }
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "./plugins/withTaxiQueries.js",
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Joylashuvingiz hozirgi joydagi taksi narxlarini hisoblash uchun ishlatiladi."
+        }
+      ],
+      "expo-asset",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4c1cb842-1e7a-4cc0-9a66-5a8b1b9f9347"
+      }
+    }
+  }
+}

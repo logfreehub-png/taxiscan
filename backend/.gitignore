@@ -1,0 +1,14 @@
+# Maxfiy muhit o'zgaruvchilari — hech qachon commit qilinmasin
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Django
+db.sqlite3
+media/
+staticfiles/

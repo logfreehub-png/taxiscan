@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 247 248 250;
+  --foreground: 15 18 22;
+  --surface: 255 255 255;
+  --surface-2: 247 248 250;
+  --line: 229 232 236;
+  --muted: 92 103 114;
+
+  /* Brend rangi shkalasi (admin o'zgartira oladi — JS bu qiymatlarni yozadi).
+     Standart: #FFCC00 (sariq). RGB triplet (Tailwind rgb(var(--brand-XXX)) uchun). */
+  --brand-50: 255 250 229;
+  --brand-100: 255 245 204;
+  --brand-200: 255 235 153;
+  --brand-300: 255 224 102;
+  --brand-400: 255 214 51;
+  --brand-500: 255 204 0;
+  --brand-600: 204 163 0;
+  --brand-700: 153 122 0;
+  --brand-800: 102 82 0;
+  --brand-900: 51 41 0;
+}
+
+html.dark {
+  --background: 13 17 23;
+  --foreground: 230 232 235;
+  --surface: 22 27 34;
+  --surface-2: 30 36 45;
+  --line: 48 54 61;
+  --muted: 139 148 158;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+  background: rgb(var(--background));
+  color: rgb(var(--foreground));
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-ink hover:bg-brand-400 px-5 py-3;
+  }
+  .btn-dark {
+    @apply btn bg-ink text-white hover:bg-ink-soft px-5 py-3;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent hover:bg-ink-line text-ink px-4 py-2;
+  }
+  .btn-outline {
+    @apply btn border border-ink-line bg-white hover:bg-ink-line/30 text-ink px-5 py-3;
+  }
+  .input {
+    @apply w-full rounded-xl border border-ink-line bg-white px-4 py-3 text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/20 transition;
+  }
+  .dark .input {
+    background-color: rgb(var(--surface));
+    border-color: rgb(var(--line));
+    color: rgb(var(--foreground));
+  }
+  .label {
+    @apply block text-sm font-medium text-ink mb-1.5;
+  }
+  .dark .label { color: rgb(var(--foreground)); }
+  .card {
+    @apply rounded-2xl bg-white border border-ink-line/70 shadow-sm;
+  }
+  .dark .card {
+    background-color: rgb(var(--surface));
+    border-color: rgb(var(--line));
+    color: rgb(var(--foreground));
+  }
+  .dark .btn-outline {
+    background-color: rgb(var(--surface));
+    border-color: rgb(var(--line));
+    color: rgb(var(--foreground));
+  }
+  .dark .text-ink { color: rgb(var(--foreground)); }
+  .dark .text-ink-muted { color: rgb(var(--muted)); }
+  .dark .bg-ink-bg { background-color: rgb(var(--surface-2)); }
+  .dark .bg-white { background-color: rgb(var(--surface)); }
+  .dark .border-ink-line { border-color: rgb(var(--line)); }
+  .card-hover {
+    @apply card hover:shadow-md hover:-translate-y-0.5 transition-all duration-200;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full text-xs font-semibold px-2.5 py-1;
+  }
+}
+
+/* Map placeholder pattern */
+.map-grid {
+  background-image:
+    linear-gradient(rgba(255,204,0,0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,204,0,0.08) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-color: #fafaf2;
+}
+
+/* Hide scrollbar while keeping functionality */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+/* Qorong'i rejim uchun OSM plitkalarini "Dark Matter"ga yaqin neytral qora xaritaga aylantiradi
+   (CartoCDN endi API kalit talab qiladi — kalitsiz OSM + CSS filtr ishlatamiz). */
+.tn-dark-tiles {
+  filter: invert(1) hue-rotate(180deg) brightness(0.88) contrast(0.92) saturate(0.5) sepia(0.08);
+}

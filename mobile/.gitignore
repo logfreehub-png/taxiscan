@@ -1,0 +1,18 @@
+# Expo / React Native
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+npm-debug.*
+yarn-error.*
+
+# Native
+*.orig.*
+.DS_Store
+ios/
+android/
+
+# Env
+.env
+expo-env.d.ts
