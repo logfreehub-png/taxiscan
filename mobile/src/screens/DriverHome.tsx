@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/theme";
+import { shadow } from "@/theme/shadow";
 import { ServiceLogo } from "@/components/ui/ServiceLogo";
 import { MapWebView, type MapZone } from "@/components/MapWebView";
 import { AppDrawer } from "@/components/AppDrawer";
@@ -210,7 +211,7 @@ export function DriverHome() {
       />
 
       {/* 2. TEPA: HAMBURGER MENYU + O'NGDA "KIM KO'P TO'LAYDI" NARX KARTASI */}
-      <View style={[styles.topHeader, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+      <View style={[styles.topHeader, { paddingTop: insets.top + 8, pointerEvents: "box-none" } as any]}>
         <Pressable
           onPress={() => setMenuOpen(true)}
           style={[styles.hamburgerBtn, { backgroundColor: cardBg, borderColor: cardBorder }]}
@@ -300,7 +301,7 @@ export function DriverHome() {
       </View>
 
       {/* 4. PASTKI KARTA: ZONA NOMI + TALAB + ZONALAR + TARIFLAR (qidiruvsiz) */}
-      <View style={[styles.bottomCardWrap, { paddingBottom: insets.bottom + 16 }]} pointerEvents="box-none">
+      <View style={[styles.bottomCardWrap, { paddingBottom: insets.bottom + 16, pointerEvents: "box-none" } as any]}>
         <View style={[styles.infoCard, { backgroundColor: cardBg, borderColor: cardBorder }]}>
           {/* Zona nomi + talab darajasi */}
           <View style={styles.zoneHeadRow}>
@@ -483,9 +484,7 @@ const styles = StyleSheet.create({
     borderColor: "#FFCC00",
     gap: 9,
     minWidth: 180,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
+    ...shadow({ color: "#000", opacity: 0.35, radius: 14 }),
     elevation: 8,
   },
   rateRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
@@ -512,9 +511,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFCC00",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
+    ...shadow({ color: "#000", opacity: 0.35, radius: 8 }),
     elevation: 6,
   },
 
@@ -525,9 +522,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderWidth: 1,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
+    ...shadow({ color: "#000", opacity: 0.35, radius: 14 }),
     elevation: 8,
   },
   zoneHeadRow: { flexDirection: "row", alignItems: "center", gap: 8 },

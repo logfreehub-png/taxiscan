@@ -1,4 +1,5 @@
 import random
+import re
 
 from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
@@ -9,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.conf import settings
+from django.utils import timezone
 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from .serializers import (
@@ -19,7 +21,7 @@ from .serializers import (
     ChangePasswordSerializer,
     NotificationSerializer,
 )
-from .models import Notification
+from .models import Notification, PhoneVerification, PhoneVerificationPurpose
 from . import reminders as reminder_utils
 
 User = get_user_model()
@@ -248,6 +250,16 @@ class RegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
+        session_id = request.data.get("session_id")
+        if session_id:
+            pv = PhoneVerification.objects.filter(session_id=session_id, is_verified=True).first()
+            if pv:
+                if pv.telegram_user_id:
+                    user.telegram_id = pv.telegram_user_id
+                if pv.telegram_username:
+                    user.telegram_username = pv.telegram_username
+                user.save(update_fields=["telegram_id", "telegram_username"])
+
         refresh = RefreshToken.for_user(user)
         refresh["role"] = user.role
         refresh["phone"] = user.phone
@@ -294,6 +306,11 @@ class SimpleRegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
 
     def create(self, request, *args, **kwargs):
+        session_id = request.data.get("session_id")
+        pv = None
+        if session_id:
+            pv = PhoneVerification.objects.filter(session_id=session_id, is_verified=True).first()
+
         # Faqat phone, password, role majburiy
         data = {
             "phone": request.data.get("phone"),
@@ -308,6 +325,14 @@ class SimpleRegisterView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
+        # Agar Telegram orqali tasdiqlangan bo'lsa, telegram ma'lumotlarini bog'laymiz
+        if pv:
+            if pv.telegram_user_id:
+                user.telegram_id = pv.telegram_user_id
+            if pv.telegram_username:
+                user.telegram_username = pv.telegram_username
+            user.save(update_fields=["telegram_id", "telegram_username"])
+
         refresh = RefreshToken.for_user(user)
         refresh["role"] = user.role
         refresh["phone"] = user.phone
@@ -321,3 +346,195 @@ class SimpleRegisterView(generics.CreateAPIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class SendVerificationCodeView(APIView):
+    """Telegram bot orqali tasdiqlash sessiyasini boshlash."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        raw_phone = request.data.get("phone", "")
+        purpose = request.data.get("purpose", PhoneVerificationPurpose.REGISTER)
+        phone = _normalize_phone(raw_phone)
+
+        if not phone or len(re.sub(r"\D", "", phone)) < 9:
+            return Response(
+                {"detail": "Telefon raqam noto'g'ri kiritildi"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Ro'yxatdan o'tish bo'lsa — raqam allaqachon mavjud emasligini tekshiramiz
+        if purpose == PhoneVerificationPurpose.REGISTER:
+            if _find_user_by_phone(phone):
+                return Response(
+                    {"detail": "Ushbu telefon raqam allaqachon ro'yxatdan o'tgan. Iltimos, tizimga kiring."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Parolni tiklash bo'lsa — raqam mavjudligini tekshiramiz
+        if purpose == PhoneVerificationPurpose.PASSWORD_RESET:
+            if not _find_user_by_phone(phone):
+                return Response(
+                    {"detail": "Ushbu telefon raqam bo'yicha hisob topilmadi."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        # Eski tasdiqlanmagan sessiyalarni muddati tugagan qilamiz
+        PhoneVerification.objects.filter(phone=phone, is_verified=False).delete()
+
+        # Yangi 6 xonali tasdiqlash kodi
+        code = f"{random.randint(100000, 999999)}"
+        pv = PhoneVerification.objects.create(
+            phone=phone,
+            code=code,
+            purpose=purpose,
+            expires_at=timezone.now() + timezone.timedelta(minutes=10),
+        )
+
+        bot_username = getattr(settings, "TELEGRAM_BOT_USERNAME", "TaxiScan_auth_bot")
+        bot_url = f"https://t.me/{bot_username}?start=auth_{pv.session_id}"
+
+        # Agar foydalanuvchi avval telegram ulagan bo'lsa, xabarni to'g'ridan-to'g'ri yuboramiz
+        existing_user = _find_user_by_phone(phone)
+        if existing_user and existing_user.telegram_id:
+            from .telegram_bot import send_telegram_message
+            send_telegram_message(
+                existing_user.telegram_id,
+                f"🚕 <b>TaxiScan tasdiqlash kodi:</b>\n\n"
+                f"👉 <code>{code}</code> 👈\n\n"
+                f"Kod 10 daqiqa amal qiladi.",
+            )
+
+        resp = {
+            "session_id": str(pv.session_id),
+            "phone": phone,
+            "bot_url": bot_url,
+            "bot_username": bot_username,
+            "expires_in": 600,
+        }
+        if settings.DEBUG:
+            resp["debug_code"] = code
+
+        return Response(resp, status=status.HTTP_200_OK)
+
+
+class VerifyPhoneCodeView(APIView):
+    """6 xonali kodni tekshirish."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        session_id = request.data.get("session_id")
+        code = (request.data.get("code") or "").strip()
+        phone = _normalize_phone(request.data.get("phone", ""))
+
+        pv = None
+        if session_id:
+            pv = PhoneVerification.objects.filter(session_id=session_id).first()
+        elif phone:
+            pv = PhoneVerification.objects.filter(phone=phone, code=code).order_by("-created_at").first()
+
+        if not pv:
+            return Response(
+                {"detail": "Tasdiqlash sessiyasi topilmadi"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if pv.is_expired:
+            return Response(
+                {"detail": "Tasdiqlash kodi muddati tugagan. Qaytadan urinib ko'ring."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if pv.code != code and not pv.is_verified:
+            return Response(
+                {"detail": "Tasdiqlash kodi noto'g'ri"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pv.is_verified = True
+        pv.verified_at = timezone.now()
+        pv.save(update_fields=["is_verified", "verified_at"])
+
+        return Response(
+            {
+                "verified": True,
+                "session_id": str(pv.session_id),
+                "phone": pv.phone,
+                "detail": "Telefon raqami muvaffaqiyatli tasdiqlandi",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class CheckVerificationStatusView(APIView):
+    """Mobil ilova Telegramda raqam ulashilganini avtomatik ushlab olishi uchun polling tekshiruvi."""
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        session_id = request.query_params.get("session_id")
+        phone = _normalize_phone(request.query_params.get("phone", ""))
+
+        pv = None
+        if session_id:
+            pv = PhoneVerification.objects.filter(session_id=session_id).first()
+        elif phone:
+            pv = PhoneVerification.objects.filter(phone=phone).order_by("-created_at").first()
+
+        if not pv:
+            return Response({"verified": False, "found": False})
+
+        return Response({
+            "found": True,
+            "verified": pv.is_verified,
+            "is_expired": pv.is_expired,
+            "session_id": str(pv.session_id),
+            "phone": pv.phone,
+            "code": pv.code if settings.DEBUG else None,
+        })
+
+
+class PhonePasswordResetConfirmView(APIView):
+    """Telefon raqam Telegram orqali tasdiqlanganidan so'ng yangi parol o'rnatish."""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        session_id = request.data.get("session_id")
+        code = (request.data.get("code") or "").strip()
+        phone = _normalize_phone(request.data.get("phone", ""))
+        new_password = request.data.get("new_password", "")
+        new_password2 = request.data.get("new_password2", "")
+
+        if len(new_password) < 6:
+            return Response({"detail": "Parol kamida 6 ta belgidan iborat bo'lsin"}, status=status.HTTP_400_BAD_REQUEST)
+        if new_password != new_password2:
+            return Response({"detail": "Parollar mos kelmaydi"}, status=status.HTTP_400_BAD_REQUEST)
+
+        pv = None
+        if session_id:
+            pv = PhoneVerification.objects.filter(session_id=session_id).first()
+        elif phone:
+            pv = PhoneVerification.objects.filter(phone=phone, code=code).order_by("-created_at").first()
+
+        if not pv:
+            return Response({"detail": "Tasdiqlash sessiyasi topilmadi"}, status=status.HTTP_404_NOT_FOUND)
+
+        if pv.is_expired:
+            return Response({"detail": "Tasdiqlash kodi muddati tugagan"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not pv.is_verified and pv.code != code:
+            return Response({"detail": "Tasdiqlash kodi noto'g'ri"}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = _find_user_by_phone(pv.phone)
+        if not user:
+            return Response({"detail": "Ushbu raqam bo'yicha foydalanuvchi topilmadi"}, status=status.HTTP_404_NOT_FOUND)
+
+        user.set_password(new_password)
+        if pv.telegram_user_id and not user.telegram_id:
+            user.telegram_id = pv.telegram_user_id
+        if pv.telegram_username and not user.telegram_username:
+            user.telegram_username = pv.telegram_username
+        user.save()
+
+        pv.delete()
+        return Response({"detail": "Parol muvaffaqiyatli yangilandi"})
+

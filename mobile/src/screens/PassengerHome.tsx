@@ -15,6 +15,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Location from "expo-location";
 import { useTheme } from "@/theme";
+import { shadow } from "@/theme/shadow";
 import { useAuth } from "@/store/auth";
 import { MapWebView, type MapMarker, type MapRoute, type MapWebViewHandle } from "@/components/MapWebView";
 import { AddressInput, type AddressValue } from "@/components/AddressInput";
@@ -645,7 +646,7 @@ export function PassengerHome() {
       />
 
       {/* 2. TEPAGI HEADER VA O'NG BURCHAKDAGI TAXI NARXLARI KARTASI */}
-      <View style={[styles.topHeader, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+      <View style={[styles.topHeader, { paddingTop: insets.top + 8, pointerEvents: "box-none" } as any]}>
         {/* Chap burchakda Hamburger Menu Tugmasi (Header ichida faqat Menu ikonkasi) */}
         <Pressable
           onPress={() => setMenuOpen(true)}
@@ -742,7 +743,7 @@ export function PassengerHome() {
       </Pressable>
 
       {/* 4. PASTKI YO'NALISH KIRITISH, YO'LLAR VA TARIFLAR KARTASI */}
-      <View style={[styles.bottomCardWrap, { paddingBottom: insets.bottom + 16 }]} pointerEvents="box-none">
+      <View style={[styles.bottomCardWrap, { paddingBottom: insets.bottom + 16, pointerEvents: "box-none" } as any]}>
         {/* Qayerdan (A) / Qayerga (B, C...) Input Card */}
         <View style={[styles.routeInputCard, { backgroundColor: cardBg, borderColor: cardBorder }]}>
           <ScrollView
@@ -1044,9 +1045,7 @@ const styles = StyleSheet.create({
     borderColor: "#FFCC00",
     gap: 8,
     minWidth: 175,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
+    ...shadow({ color: "#000", opacity: 0.35, radius: 14 }),
     elevation: 8,
   },
   rateRow: {
@@ -1109,9 +1108,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFCC00",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
+    ...shadow({ color: "#000", opacity: 0.4, radius: 10 }),
     elevation: 8,
     zIndex: 35,
   },
@@ -1132,9 +1129,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderWidth: 1,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
+    ...shadow({ color: "#000", opacity: 0.35, radius: 14 }),
     elevation: 8,
   },
   routeRow: {
@@ -1264,9 +1259,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFCC00",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#FFCC00",
-    shadowOpacity: 0.4,
-    shadowRadius: 14,
+    ...shadow({ color: "#FFCC00", opacity: 0.4, radius: 14 }),
     elevation: 8,
   },
   actionButtonText: {

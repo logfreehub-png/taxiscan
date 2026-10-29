@@ -14,9 +14,9 @@ import Constants from "expo-constants";
  */
 
 const PROD_API_BASE = "https://backend.taxiscan.app";
-const USE_PROD = true; // Server bilan ishlash uchun faollashtirildi
+const USE_PROD = typeof __DEV__ !== "undefined" ? !__DEV__ : false;
 
-const LAN_IP = "192.168.100.28";
+const LAN_IP = "10.50.9.43";
 const USE_LAN = false;
 
 const PORT = 8001;
@@ -30,6 +30,9 @@ function getDevHostIp(): string | null {
     (Constants as any)?.manifest2?.extra?.expoGo?.debuggerHost;
   if (!hostUri) return null;
   const host = String(hostUri).split(":")[0];
+  if (host.includes("exp.direct") || host.includes("ngrok") || host.includes("expo.dev")) {
+    return null;
+  }
   return host || null;
 }
 

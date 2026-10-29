@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { User } from "@/lib/api/types";
-import { apiGet, apiPost, setTokens, clearTokens } from "@/lib/api/client";
+import { apiGet, apiPost, setTokens, clearTokens, getAccessToken } from "@/lib/api/client";
 
 const USER_KEY = "tn_user";
 const ONBOARDED_KEY = "tn_onboarded";
@@ -14,6 +14,7 @@ interface RegisterData {
   last_name: string;
   role: "driver" | "passenger";
   city?: string;
+  session_id?: string;
 }
 
 interface AuthState {
@@ -53,6 +54,13 @@ export const useAuth = create<AuthState>()((set, get) => ({
       set({ hydrated: true });
     }
     // Fon rejimida profilni yangilab olamiz (token bo'lsa)
+    if (!(await getAccessToken())) {
+      if (get().user) {
+        set({ user: null });
+        await persistUser(null);
+      }
+      return;
+    }
     get()
       .loadMe()
       .catch(() => {});

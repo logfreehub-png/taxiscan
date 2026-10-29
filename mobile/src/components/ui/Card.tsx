@@ -1,5 +1,5 @@
 import React from "react";
-import { View, StyleSheet, ViewStyle, StyleProp } from "react-native";
+import { View, StyleSheet, ViewStyle, StyleProp, Platform } from "react-native";
 import { useTheme, radius } from "@/theme";
 
 export function Card({
@@ -12,6 +12,18 @@ export function Card({
   padded?: boolean;
 }) {
   const { colors, isDark } = useTheme();
+
+  const shadowStyle: any =
+    Platform.OS === "web"
+      ? { boxShadow: isDark ? "none" : "0px 4px 12px rgba(0, 0, 0, 0.06)" }
+      : {
+          shadowColor: colors.shadow,
+          shadowOpacity: isDark ? 0 : 0.06,
+          shadowOffset: { width: 0, height: 4 },
+          shadowRadius: 12,
+          elevation: 1,
+        };
+
   return (
     <View
       style={[
@@ -19,9 +31,8 @@ export function Card({
         {
           backgroundColor: colors.card,
           borderColor: colors.line,
-          shadowColor: colors.shadow,
-          shadowOpacity: isDark ? 0 : 0.06,
         },
+        shadowStyle,
         padded && styles.padded,
         style,
       ]}
@@ -35,9 +46,6 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 12,
-    elevation: 1,
   },
   padded: {
     padding: 16,

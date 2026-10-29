@@ -1,5 +1,7 @@
+import uuid
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 
 
 class UserRole(models.TextChoices):
@@ -46,6 +48,8 @@ class User(AbstractUser):
         choices=[("inherit", "Global sozlama"), ("on", "Yoqilgan"), ("off", "O'chirilgan")],
         default="inherit",
     )
+    telegram_id = models.BigIntegerField("Telegram ID", null=True, blank=True, db_index=True)
+    telegram_username = models.CharField("Telegram Username", max_length=100, blank=True)
     last_seen = models.DateTimeField("Oxirgi aktivlik", null=True, blank=True, db_index=True)
     total_seconds_active = models.PositiveIntegerField("Jami aktiv soniyalar", default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -174,3 +178,42 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.user.phone}: {self.title}"
+
+
+class PhoneVerificationPurpose(models.TextChoices):
+    REGISTER = "register", "Ro'yxatdan o'tish"
+    PASSWORD_RESET = "password_reset", "Parolni tiklash"
+    LOGIN = "login", "Kirish"
+
+
+class PhoneVerification(models.Model):
+    """Telegram bot orqali telefon raqamni tasdiqlash sessiyasi."""
+    session_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    phone = models.CharField("Telefon raqam", max_length=25, db_index=True)
+    code = models.CharField("6 xonali tasdiqlash kodi", max_length=6)
+    purpose = models.CharField(
+        "Maqsad",
+        max_length=20,
+        choices=PhoneVerificationPurpose.choices,
+        default=PhoneVerificationPurpose.REGISTER,
+    )
+    telegram_user_id = models.BigIntegerField("Telegram User ID", null=True, blank=True)
+    telegram_username = models.CharField("Telegram Username", max_length=100, blank=True)
+    is_verified = models.BooleanField("Tasdiqlangan", default=False, db_index=True)
+    verified_at = models.DateTimeField("Tasdiqlangan vaqt", null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    expires_at = models.DateTimeField("Amal qilish muddati")
+
+    class Meta:
+        verbose_name = "Telefon tasdiqlash"
+        verbose_name_plural = "Telefon tasdiqlashlar"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        status_str = "Tasdiqlangan" if self.is_verified else "Kutilmoqda"
+        return f"{self.phone} - {self.code} ({status_str})"
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+

@@ -18,9 +18,8 @@ export default function Index() {
     );
   }
 
-  // Birinchi marta ochilganda — tanishtiruv (faqat hali kirmagan foydalanuvchiga)
-  if (!onboarded && !user) return <Redirect href="/onboarding" />;
-  if (!user) return <Redirect href="/(auth)/login" />;
+  // Tizimga kirmagan foydalanuvchi uchun onboarding boshida turadi
+  if (!user) return <Redirect href="/onboarding" />;
   return <Redirect href="/(tabs)" />;
 }
 

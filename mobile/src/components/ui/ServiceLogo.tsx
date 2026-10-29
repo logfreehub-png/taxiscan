@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, StyleSheet, Image } from "react-native";
 import { BRAND_LOGOS } from "@/assets/brandLogos";
+import { shadow } from "@/theme/shadow";
 
 /**
  * Taksi brendining logotipi.
@@ -119,10 +120,7 @@ export function ServiceLogo({
           height: size,
           borderRadius: radius,
           backgroundColor: bg,
-          shadowColor: bg,
-          shadowOpacity: 0.35,
-          shadowRadius: size * 0.14,
-          shadowOffset: { width: 0, height: 1 },
+          ...shadow({ color: bg, opacity: 0.35, radius: size * 0.14, offsetY: 1 }),
         },
       ]}
     >

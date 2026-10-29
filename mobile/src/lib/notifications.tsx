@@ -2,7 +2,7 @@ import React, {
   createContext, useContext, useEffect, useRef, useState, useCallback,
 } from "react";
 import {
-  View, Text, StyleSheet, Pressable, Modal, FlatList, Animated, ScrollView,
+  View, Text, StyleSheet, Pressable, Modal, FlatList, Animated, ScrollView, Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -147,7 +147,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       {children}
 
       {/* BANNER — ilova ildizida, hamma narsadan tepada, navbar ustida emas, touch bloklamaydi */}
-      <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+      <View
+        pointerEvents={Platform.OS === "web" ? undefined : "box-none"}
+        style={[StyleSheet.absoluteFill, Platform.OS === "web" && styles.boxNone]}
+      >
         {banner ? (
           <Animated.View
             style={[styles.banner, { top: insets.top + 8, backgroundColor: colors.card, transform: [{ translateY: slide }] }]}
@@ -260,10 +263,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 }
 
 const styles = StyleSheet.create({
+  // Webda pointerEvents faqat StyleSheet.create ichida ishlaydi (inline stilda e'tiborsiz qoladi)
+  boxNone: { pointerEvents: "box-none" },
   banner: {
     position: "absolute", left: 12, right: 12, flexDirection: "row", alignItems: "stretch",
     borderRadius: radius.lg, overflow: "hidden", zIndex: 1000,
-    elevation: 12, shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 14, shadowOffset: { width: 0, height: 6 },
+    elevation: 12,
+    ...(Platform.OS === "web"
+      ? ({ boxShadow: "0px 6px 14px rgba(0,0,0,0.3)" } as any)
+      : { shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 14, shadowOffset: { width: 0, height: 6 } }),
   },
   bannerAccent: { width: 4 },
   bannerInner: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },

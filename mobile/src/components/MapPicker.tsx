@@ -11,6 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme, radius } from "@/theme";
+import { shadow } from "@/theme/shadow";
 import { Button } from "@/components/ui/Button";
 import { MapWebView, type MapWebViewHandle } from "@/components/MapWebView";
 import { reverseGeocode, shortenLabel } from "@/lib/api/geocoding";
@@ -140,7 +141,7 @@ export function MapPicker({
           </Pressable>
 
           {/* Markaz ko'rsatkichi izohi */}
-          <View pointerEvents="none" style={styles.hintWrap}>
+          <View style={[styles.hintWrap, { pointerEvents: "none" } as any]}>
             <View style={[styles.hint, { backgroundColor: colors.ink + "E6" }]}>
               <Text style={styles.hintTxt}>Xaritani suring — nuqta markazda turadi</Text>
             </View>
@@ -196,10 +197,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: StyleSheet.hairlineWidth,
     elevation: 4,
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    ...shadow({ color: "#000", opacity: 0.2, radius: 6, offsetY: 2 }),
   },
   hintWrap: { position: "absolute", top: 12, left: 0, right: 0, alignItems: "center" },
   hint: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.full },

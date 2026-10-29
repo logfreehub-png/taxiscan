@@ -45,6 +45,10 @@ EMAIL_BACKEND = os.environ.get(
 )
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "TaxiNarx <noreply@taxinarx.uz>")
 
+# Telegram Bot sozlamalari (telefon raqamini tasdiqlash uchun)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "TaxiScan_auth_bot")
+
 INSTALLED_APPS = [
     # Daphne — runserver'ni ASGI (WebSocket) rejimida ishlatishi uchun eng tepada
     "daphne",

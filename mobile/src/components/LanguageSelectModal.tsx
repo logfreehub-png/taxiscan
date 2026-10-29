@@ -9,6 +9,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme, radius } from "@/theme";
+import { shadow } from "@/theme/shadow";
 import { useI18n, type Language } from "@/i18n";
 
 export function LanguageSelectModal({
@@ -299,9 +300,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
   },
   pillButtonActive: {
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
+    ...shadow({ color: "#000", opacity: 0.1, radius: 3 }),
     elevation: 2,
   },
   pillFlag: {
