@@ -21,7 +21,10 @@ from .serializers import (
     ChangePasswordSerializer,
     NotificationSerializer,
 )
-from .models import Notification, PhoneVerification, PhoneVerificationPurpose
+from .models import Notification, PhoneVerification, PhoneVerificationPurpose, DeviceSession
+from .authentication import (
+    issue_tokens, active_other_session, revoke_sessions, is_single_device_exempt,
+)
 from . import reminders as reminder_utils
 
 User = get_user_model()
@@ -260,22 +263,172 @@ class RegisterView(generics.CreateAPIView):
                     user.telegram_username = pv.telegram_username
                 user.save(update_fields=["telegram_id", "telegram_username"])
 
-        refresh = RefreshToken.for_user(user)
-        refresh["role"] = user.role
-        refresh["phone"] = user.phone
+        tokens = issue_tokens(
+            user, request,
+            device_id=request.data.get("device_id", ""),
+            device_name=request.data.get("device_name", ""),
+            create_session_without_device=False,
+        )
 
         return Response(
             {
                 "user": UserSerializer(user).data,
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
+                "access": tokens["access"],
+                "refresh": tokens["refresh"],
             },
             status=status.HTTP_201_CREATED,
         )
 
 
-class LoginView(TokenObtainPairView):
-    serializer_class = PhoneTokenObtainPairSerializer
+def _check_credentials(request):
+    """Telefon + parolni tekshiradi. (user, error_response) qaytaradi."""
+    ser = PhoneTokenObtainPairSerializer(
+        data={"phone": request.data.get("phone"), "password": request.data.get("password")}
+    )
+    try:
+        ser.is_valid(raise_exception=True)
+    except Exception:
+        return None, Response(
+            {"detail": "Telefon yoki parol noto'g'ri"}, status=status.HTTP_401_UNAUTHORIZED
+        )
+    return ser.user, None
+
+
+class LoginView(APIView):
+    """Telefon + parol bilan kirish.
+
+    Bitta akkaunt faqat bitta qurilmada: boshqa qurilmada aktiv sessiya bo'lsa
+    409 `code=other_device` qaytadi — ilova "Boshqa qurilmadan kirgansiz,
+    u qurilmani chiqarib yuborasizmi?" deb so'raydi.
+    """
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        user, err = _check_credentials(request)
+        if err:
+            return err
+        device_id = (request.data.get("device_id") or "").strip()
+        device_name = request.data.get("device_name", "")
+
+        if not is_single_device_exempt(user):
+            other = active_other_session(user, device_id)
+            if other:
+                return Response(
+                    {
+                        "code": "other_device",
+                        "detail": "Siz boshqa qurilmadan kirgansiz.",
+                        "device_name": other.device_name or "Boshqa qurilma",
+                        "last_seen": other.last_seen,
+                        "has_telegram": bool(user.telegram_id),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        tokens = issue_tokens(user, request, device_id=device_id, device_name=device_name)
+        return Response({"access": tokens["access"], "refresh": tokens["refresh"]})
+
+
+class ForceLoginRequestView(APIView):
+    """"Ha, chiqarib yuboraman" — Telegramga tasdiqlash kodi yuboriladi."""
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        user, err = _check_credentials(request)
+        if err:
+            return err
+
+        PhoneVerification.objects.filter(
+            phone=user.phone, purpose=PhoneVerificationPurpose.LOGIN, is_verified=False
+        ).delete()
+        code = f"{random.randint(100000, 999999)}"
+        pv = PhoneVerification.objects.create(
+            phone=user.phone,
+            code=code,
+            purpose=PhoneVerificationPurpose.LOGIN,
+            expires_at=timezone.now() + timezone.timedelta(minutes=10),
+        )
+
+        sent = False
+        if user.telegram_id:
+            from .telegram_bot import send_telegram_message
+            sent = send_telegram_message(
+                user.telegram_id,
+                "🔐 <b>TaxiScan — yangi qurilmadan kirish</b>\n\n"
+                f"Tasdiqlash kodi: 👉 <code>{code}</code> 👈\n\n"
+                "Kodni kiritsangiz, eski qurilma akkauntdan chiqariladi.\n"
+                "Agar bu siz bo'lmasangiz — kodni hech kimga bermang!",
+            )
+
+        bot_username = getattr(settings, "TELEGRAM_BOT_USERNAME", "TaxiScan_auth_bot")
+        resp = {
+            "session_id": str(pv.session_id),
+            "phone": user.phone,
+            "sent": sent,
+            "bot_url": f"https://t.me/{bot_username}?start=auth_{pv.session_id}",
+            "bot_username": bot_username,
+            "expires_in": 600,
+        }
+        if settings.DEBUG:
+            resp["debug_code"] = code
+        return Response(resp)
+
+
+class ForceLoginConfirmView(APIView):
+    """Kod to'g'ri bo'lsa — eski qurilmalar chiqariladi va shu qurilmaga kirish beriladi."""
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        user, err = _check_credentials(request)
+        if err:
+            return err
+        session_id = request.data.get("session_id")
+        code = (request.data.get("code") or "").strip()
+        pv = None
+        if session_id:
+            pv = PhoneVerification.objects.filter(
+                session_id=session_id, purpose=PhoneVerificationPurpose.LOGIN
+            ).first()
+
+        if not pv or pv.phone != user.phone:
+            return Response({"detail": "Tasdiqlash sessiyasi topilmadi"}, status=status.HTTP_404_NOT_FOUND)
+        if pv.is_expired:
+            return Response({"detail": "Kod muddati tugagan. Qaytadan yuboring."}, status=status.HTTP_400_BAD_REQUEST)
+        if pv.code != code:
+            return Response({"detail": "Tasdiqlash kodi noto'g'ri"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if pv.telegram_user_id and not user.telegram_id:
+            user.telegram_id = pv.telegram_user_id
+            user.save(update_fields=["telegram_id"])
+        pv.delete()
+
+        kicked = revoke_sessions(user, "other_device")
+        tokens = issue_tokens(
+            user, request,
+            device_id=(request.data.get("device_id") or "").strip(),
+            device_name=request.data.get("device_name", ""),
+        )
+        return Response({
+            "access": tokens["access"],
+            "refresh": tokens["refresh"],
+            "kicked": kicked,
+            "detail": "Eski qurilma akkauntdan chiqarildi",
+        })
+
+
+class LogoutView(APIView):
+    """Joriy qurilma sessiyasini yopadi (token shundan keyin ishlamaydi)."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        sid = request.auth.get("sid") if request.auth else None
+        if sid:
+            DeviceSession.objects.filter(sid=sid, revoked_at__isnull=True).update(
+                revoked_at=timezone.now(), revoke_reason="logout"
+            )
+        return Response({"detail": "Chiqildi"})
 
 
 class MeView(generics.RetrieveUpdateAPIView):
@@ -333,15 +486,18 @@ class SimpleRegisterView(generics.CreateAPIView):
                 user.telegram_username = pv.telegram_username
             user.save(update_fields=["telegram_id", "telegram_username"])
 
-        refresh = RefreshToken.for_user(user)
-        refresh["role"] = user.role
-        refresh["phone"] = user.phone
+        tokens = issue_tokens(
+            user, request,
+            device_id=request.data.get("device_id", ""),
+            device_name=request.data.get("device_name", ""),
+            create_session_without_device=False,
+        )
 
         return Response(
             {
                 "user": UserSerializer(user, context={"request": request}).data,
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
+                "access": tokens["access"],
+                "refresh": tokens["refresh"],
                 "needs_profile": not user.profile_completed,
             },
             status=status.HTTP_201_CREATED,
@@ -445,7 +601,8 @@ class VerifyPhoneCodeView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if pv.code != code and not pv.is_verified:
+        # Kod har doim mos kelishi shart (Telegram kontakt ulashgani kodni o'zi tasdiqlamaydi)
+        if pv.code != code:
             return Response(
                 {"detail": "Tasdiqlash kodi noto'g'ri"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -486,6 +643,8 @@ class CheckVerificationStatusView(APIView):
         return Response({
             "found": True,
             "verified": pv.is_verified,
+            # Telegram bot kodni yuborganmi (kontakt ulashilgan) — ilova kod kiritish oynasiga o'tadi
+            "code_sent": bool(pv.telegram_user_id) or pv.is_verified,
             "is_expired": pv.is_expired,
             "session_id": str(pv.session_id),
             "phone": pv.phone,
@@ -521,7 +680,7 @@ class PhonePasswordResetConfirmView(APIView):
         if pv.is_expired:
             return Response({"detail": "Tasdiqlash kodi muddati tugagan"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not pv.is_verified and pv.code != code:
+        if pv.code != code:
             return Response({"detail": "Tasdiqlash kodi noto'g'ri"}, status=status.HTTP_400_BAD_REQUEST)
 
         user = _find_user_by_phone(pv.phone)

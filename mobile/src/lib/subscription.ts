@@ -16,6 +16,16 @@ import { useAuth } from "@/store/auth";
 
 export const FREE_DAILY_SEARCHES = 1;
 
+/**
+ * Bepul foydalanuvchiga ro'yxatdagi qaysi taksilar ochiq ko'rinadi (0 dan boshlanadi).
+ * Tepadan 3- va 4-taksi ochiq, qolganlari (1, 2, 5, ...) qulflangan.
+ */
+export const FREE_VISIBLE_INDEXES = [2, 3];
+
+export function isFreeVisibleIndex(index: number): boolean {
+  return FREE_VISIBLE_INDEXES.includes(index);
+}
+
 /** Obuna faolmi (hook). */
 export function useIsPremium(): boolean {
   return useAuth((s) => Boolean(s.user?.subscription?.is_active));

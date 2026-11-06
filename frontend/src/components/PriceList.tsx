@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { ServiceLogo } from "@/components/ui/ServiceLogo";
 import { formatUzs, formatNum } from "@/lib/format";
 import { ExternalLink, Sparkles, ChevronDown, Maximize2, Lock } from "lucide-react";
+import { isFreeVisibleIndex } from "@/lib/subscription";
 import { openTaxiApp } from "@/lib/openTaxiApp";
 
 interface ServiceInfo {
@@ -288,7 +289,7 @@ export function PriceList({
 
   return (
     <div className="space-y-2.5">
-      {sorted.map((r, i) => renderRow(r, freeLimit != null && i >= freeLimit))}
+      {sorted.map((r, i) => renderRow(r, freeLimit != null && !isFreeVisibleIndex(i)))}
     </div>
   );
 }

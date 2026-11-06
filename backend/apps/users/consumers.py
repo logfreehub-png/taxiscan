@@ -16,8 +16,10 @@ def _user_from_token(token: str):
     try:
         from rest_framework_simplejwt.tokens import AccessToken
         from django.contrib.auth import get_user_model
+        from .authentication import SessionJWTAuthentication
         data = AccessToken(token)
-        return get_user_model().objects.get(id=data["user_id"])
+        # Qurilma sessiyasi bekor qilingan bo'lsa (boshqa qurilmadan kirilgan) — rad etiladi
+        return SessionJWTAuthentication().get_user(data)
     except Exception:
         return None
 

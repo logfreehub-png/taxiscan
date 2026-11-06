@@ -9,6 +9,7 @@ from .views import (
     DeleteAccountLookupView, DeleteAccountVerifyView, DeleteAccountConfirmView,
     SendVerificationCodeView, VerifyPhoneCodeView, CheckVerificationStatusView,
     PhonePasswordResetConfirmView,
+    ForceLoginRequestView, ForceLoginConfirmView, LogoutView,
 )
 
 urlpatterns = [
@@ -18,6 +19,9 @@ urlpatterns = [
     path("phone/verify-code/", VerifyPhoneCodeView.as_view(), name="phone-verify-code"),
     path("phone/check-status/", CheckVerificationStatusView.as_view(), name="phone-check-status"),
     path("login/", LoginView.as_view(), name="auth-login"),
+    path("login/force/request/", ForceLoginRequestView.as_view(), name="auth-login-force-request"),
+    path("login/force/confirm/", ForceLoginConfirmView.as_view(), name="auth-login-force-confirm"),
+    path("logout/", LogoutView.as_view(), name="auth-logout"),
     path("refresh/", TokenRefreshView.as_view(), name="auth-refresh"),
     path("me/", MeView.as_view(), name="auth-me"),
     path("profile/complete/", ProfileCompletionView.as_view(), name="profile-complete"),

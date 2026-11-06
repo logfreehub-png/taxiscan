@@ -24,6 +24,20 @@ export async function clearTokens() {
   await AsyncStorage.multiRemove([ACCESS_KEY, REFRESH_KEY]);
 }
 
+/**
+ * Server "session_revoked" qaytarsa (akkauntga boshqa qurilmadan kirilgan) —
+ * ilova ildizida ro'yxatdan o'tgan tutqich chaqiriladi va foydalanuvchi chiqariladi.
+ */
+let sessionRevokedHandler: ((message: string) => void) | null = null;
+export function onSessionRevoked(fn: ((message: string) => void) | null) {
+  sessionRevokedHandler = fn;
+}
+function checkRevoked(status: number, data: any) {
+  if (status === 401 && data && typeof data === "object" && data.code === "session_revoked") {
+    sessionRevokedHandler?.(data.detail || "Akkauntingizga boshqa qurilmadan kirildi.");
+  }
+}
+
 export class ApiError extends Error {
   status: number;
   data: any;
@@ -78,7 +92,10 @@ export async function api<T = any>(path: string, options: Options = {}): Promise
     }
   }
 
-  if (!res.ok) throw new ApiError(res.status, data);
+  if (!res.ok) {
+    if (auth) checkRevoked(res.status, data);
+    throw new ApiError(res.status, data);
+  }
   return data as T;
 }
 
@@ -117,6 +134,9 @@ export async function apiUpload<T = any>(
   if (text) {
     try { data = JSON.parse(text); } catch { data = text; }
   }
-  if (!res.ok) throw new ApiError(res.status, data);
+  if (!res.ok) {
+    checkRevoked(res.status, data);
+    throw new ApiError(res.status, data);
+  }
   return data as T;
 }

@@ -7,13 +7,11 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  TouchableWithoutFeedback,
-  Keyboard,
+  Alert,
 } from "react-native";
 import { useRouter, Link } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAuth } from "@/store/auth";
 import { useTheme, radius } from "@/theme";
 import { useI18n } from "@/i18n";
 import { Logo } from "@/components/ui/Header";
@@ -21,16 +19,16 @@ import { Field, PhoneField } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { LanguageSelectModal } from "@/components/LanguageSelectModal";
-import { PhoneVerificationModal } from "@/components/PhoneVerificationModal";
+import { PhoneCodeFlow, VerifySession } from "@/components/PhoneCodeFlow";
 import { apiPost } from "@/lib/api/client";
 
 export default function RegisterScreen() {
   const router = useRouter();
-  const register = useAuth((s) => s.register);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
 
+  const [step, setStep] = useState<"phone" | "verify" | "password">("phone");
   const [role, setRole] = useState<"passenger" | "driver">("passenger");
   const [phone, setPhone] = useState("+998");
   const [password, setPassword] = useState("");
@@ -38,109 +36,92 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [langModalOpen, setLangModalOpen] = useState(false);
+  const [session, setSession] = useState<VerifySession | null>(null);
+  const [verifiedCode, setVerifiedCode] = useState("");
 
-  // Telegram bot orqali tasdiqlash holati
-  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
-  const [verifySession, setVerifySession] = useState<{
-    sessionId: string;
-    botUrl: string;
-    botUsername: string;
-    phone: string;
-  } | null>(null);
+  const firstError = (err: any, fallback: string) => {
+    const data = err?.data;
+    const first = (data && typeof data === "object" && Object.values(data)[0]) || fallback;
+    return Array.isArray(first) ? String(first[0]) : String(first);
+  };
 
-  const submit = async () => {
-    if (password !== password2) {
-      setError(t("auth.passwordsDoNotMatch"));
-      return;
-    }
-    if (password.length < 6) {
-      setError(t("auth.passwordMinLength"));
-      return;
-    }
-
+  // 1-qadam: Telegram tasdiqlash sessiyasini boshlash
+  const sendCode = async () => {
     const cleanPhone = phone.trim();
-    if (!cleanPhone || cleanPhone.replace(/\D/g, "").length < 9) {
+    if (!cleanPhone || cleanPhone.replace(/\D/g, "").length < 12) {
       setError("Telefon raqam noto'g'ri kiritildi");
       return;
     }
-
     setLoading(true);
     setError(null);
     try {
-      // Telegram bot tasdiqlash sessiyasini boshlash
-      const res = await apiPost<{
-        session_id: string;
-        bot_url: string;
-        bot_username: string;
-      }>(
+      const res = await apiPost<{ session_id: string; bot_url: string; bot_username: string }>(
         "/auth/phone/send-code/",
         { phone: cleanPhone, purpose: "register" },
         { auth: false }
       );
-
-      setVerifySession({
+      setSession({
         sessionId: res.session_id,
         botUrl: res.bot_url,
         botUsername: res.bot_username || "TaxiScan_auth_bot",
         phone: cleanPhone,
       });
-      setVerifyModalOpen(true);
+      setStep("verify");
     } catch (err: any) {
-      const data = err?.data;
-      const first =
-        (data && typeof data === "object" && Object.values(data)[0]) ||
-        t("auth.registerError");
-      setError(Array.isArray(first) ? first[0] : String(first));
+      setError(firstError(err, t("auth.registerError")));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCompleteRegister = async (sessionId: string) => {
-    setVerifyModalOpen(false);
+  // 3-qadam: parol o'rnatib ro'yxatdan o'tish -> login sahifasiga
+  const finish = async () => {
+    if (password.length < 6) {
+      setError(t("auth.passwordMinLength"));
+      return;
+    }
+    if (password !== password2) {
+      setError(t("auth.passwordsDoNotMatch"));
+      return;
+    }
     setLoading(true);
+    setError(null);
     try {
-      await register({
-        phone: phone.trim(),
-        password,
-        password2,
-        role,
-        first_name: "",
-        last_name: "",
-        city: "Tashkent",
-        session_id: sessionId,
-      });
-      router.replace("/(tabs)");
+      await apiPost(
+        "/auth/register/",
+        {
+          phone: session?.phone || phone.trim(),
+          password,
+          password2,
+          role,
+          first_name: "",
+          last_name: "",
+          city: "Tashkent",
+          session_id: session?.sessionId,
+        },
+        { auth: false }
+      );
+      const goLogin = () => router.replace("/(auth)/login");
+      if (Platform.OS === "web") goLogin();
+      else
+        Alert.alert("Tayyor!", "Ro'yxatdan muvaffaqiyatli o'tdingiz. Endi telefon va parol bilan kiring.", [
+          { text: t("auth.loginBtn"), onPress: goLogin },
+        ]);
     } catch (err: any) {
-      const data = err?.data;
-      const first =
-        (data && typeof data === "object" && Object.values(data)[0]) ||
-        t("auth.registerError");
-      setError(Array.isArray(first) ? first[0] : String(first));
+      setError(firstError(err, t("auth.registerError")));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleResendCode = async () => {
-    const cleanPhone = phone.trim();
-    const res = await apiPost<{
-      session_id: string;
-      bot_url: string;
-      bot_username: string;
-    }>(
-      "/auth/phone/send-code/",
-      { phone: cleanPhone, purpose: "register" },
-      { auth: false }
-    );
+  const subtitle =
+    step === "phone"
+      ? "Telefon raqamingizni kiriting — Telegram orqali tasdiqlash kodi yuboriladi."
+      : step === "verify"
+      ? "Telefon raqamingizni tasdiqlang"
+      : "Raqam tasdiqlandi. Endi parol o'rnating.";
 
-    setVerifySession({
-      sessionId: res.session_id,
-      botUrl: res.bot_url,
-      botUsername: res.bot_username || "TaxiScan_auth_bot",
-      phone: cleanPhone,
-    });
-  };
+  const stepIndex = step === "phone" ? 0 : step === "verify" ? 1 : 2;
 
   return (
     <KeyboardAvoidingView
@@ -177,62 +158,104 @@ export default function RegisterScreen() {
 
           <Card padded>
             <Text style={[styles.title, { color: colors.ink }]}>{t("auth.registerTitle")}</Text>
-            <Text style={[styles.subtitle, { color: colors.inkMuted }]}>
-              {t("auth.registerSubtitle")}
-            </Text>
+            <Text style={[styles.subtitle, { color: colors.inkMuted }]}>{subtitle}</Text>
 
-            <View style={[styles.roleTabs, { backgroundColor: colors.cardAlt }]}>
-              {([
-                { key: "passenger", label: t("auth.rolePassenger"), icon: "person-outline" },
-                { key: "driver", label: t("auth.roleDriver"), icon: "car-outline" },
-              ] as const).map((r) => {
-                const sel = role === r.key;
-                return (
-                  <Pressable
-                    key={r.key}
-                    onPress={() => setRole(r.key)}
-                    style={[styles.roleTab, sel && { backgroundColor: colors.card }]}
-                  >
-                    <Ionicons name={r.icon} size={16} color={sel ? colors.ink : colors.inkMuted} />
-                    <Text style={[styles.roleTxt, { color: sel ? colors.ink : colors.inkMuted }]}>
-                      {r.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+            {/* Qadamlar indikatori */}
+            <View style={styles.stepsRow}>
+              {[0, 1, 2].map((i) => (
+                <View
+                  key={i}
+                  style={[styles.stepBar, { backgroundColor: i <= stepIndex ? colors.brand : colors.line }]}
+                />
+              ))}
             </View>
 
-            <View style={{ gap: 14, marginTop: 16 }}>
-              <PhoneField
-                label={t("auth.phone")}
-                value={phone}
-                onChangePhone={(fullPhone) => setPhone(fullPhone)}
-              />
-              <Field
-                label={t("auth.password")}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                placeholder="••••••"
-                leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
-              />
-              <Field
-                label={t("auth.confirmPassword")}
-                value={password2}
-                onChangeText={setPassword2}
-                secureTextEntry
-                placeholder="••••••"
-                leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
-              />
-
-              {error ? (
-                <View style={[styles.errorBox, { backgroundColor: colors.redBg }]}>
-                  <Text style={{ color: colors.red, fontSize: 13, fontWeight: "600" }}>{error}</Text>
+            {step === "phone" ? (
+              <>
+                <View style={[styles.roleTabs, { backgroundColor: colors.cardAlt }]}>
+                  {([
+                    { key: "passenger", label: t("auth.rolePassenger"), icon: "person-outline" },
+                    { key: "driver", label: t("auth.roleDriver"), icon: "car-outline" },
+                  ] as const).map((r) => {
+                    const sel = role === r.key;
+                    return (
+                      <Pressable
+                        key={r.key}
+                        onPress={() => setRole(r.key)}
+                        style={[styles.roleTab, sel && { backgroundColor: colors.card }]}
+                      >
+                        <Ionicons name={r.icon} size={16} color={sel ? colors.ink : colors.inkMuted} />
+                        <Text style={[styles.roleTxt, { color: sel ? colors.ink : colors.inkMuted }]}>
+                          {r.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
-              ) : null}
 
-              <Button title={t("common.continue")} onPress={submit} loading={loading} />
-            </View>
+                <View style={{ gap: 14, marginTop: 16 }}>
+                  <PhoneField
+                    label={t("auth.phone")}
+                    value={phone}
+                    onChangePhone={(fullPhone) => {
+                      setPhone(fullPhone);
+                      if (error) setError(null);
+                    }}
+                  />
+                  {error ? (
+                    <View style={[styles.errorBox, { backgroundColor: colors.redBg }]}>
+                      <Text style={{ color: colors.red, fontSize: 13, fontWeight: "600" }}>{error}</Text>
+                    </View>
+                  ) : null}
+                  <Button title="Kod olish" onPress={sendCode} loading={loading} />
+                </View>
+              </>
+            ) : step === "verify" && session ? (
+              <PhoneCodeFlow
+                session={session}
+                onVerified={(code) => {
+                  setVerifiedCode(code);
+                  setError(null);
+                  setStep("password");
+                }}
+                onResend={sendCode}
+                onChangePhone={() => {
+                  setError(null);
+                  setStep("phone");
+                }}
+              />
+            ) : (
+              <View style={{ gap: 14, marginTop: 18 }}>
+                <View style={[styles.okRow, { backgroundColor: colors.greenBg }]}>
+                  <Ionicons name="checkmark-circle" size={18} color={colors.green} />
+                  <Text style={{ color: colors.green, fontWeight: "800", fontSize: 13, flex: 1 }}>
+                    {session?.phone} tasdiqlandi
+                  </Text>
+                </View>
+                <Field
+                  label={t("auth.password")}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                  placeholder="kamida 6 ta belgi"
+                  leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
+                />
+                <Field
+                  label={t("auth.confirmPassword")}
+                  value={password2}
+                  onChangeText={setPassword2}
+                  secureTextEntry
+                  placeholder="••••••"
+                  leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
+                />
+                {error ? (
+                  <View style={[styles.errorBox, { backgroundColor: colors.redBg }]}>
+                    <Text style={{ color: colors.red, fontSize: 13, fontWeight: "600" }}>{error}</Text>
+                  </View>
+                ) : null}
+                <Button title="Ro'yxatdan o'tish" onPress={finish} loading={loading} />
+              </View>
+            )}
 
             <View style={styles.footer}>
               <Text style={{ color: colors.inkMuted, fontSize: 14 }}>{t("auth.haveAccount")} </Text>
@@ -254,18 +277,6 @@ export default function RegisterScreen() {
         subtitle={t("lang.selectPrompt")}
       />
 
-      {verifySession ? (
-        <PhoneVerificationModal
-          visible={verifyModalOpen}
-          phone={verifySession.phone}
-          sessionId={verifySession.sessionId}
-          botUrl={verifySession.botUrl}
-          botUsername={verifySession.botUsername}
-          onClose={() => setVerifyModalOpen(false)}
-          onVerified={handleCompleteRegister}
-          onResend={handleResendCode}
-        />
-      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -319,5 +330,8 @@ const styles = StyleSheet.create({
   },
   roleTxt: { fontSize: 14, fontWeight: "800" },
   errorBox: { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+  okRow: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 12, padding: 12 },
+  stepsRow: { flexDirection: "row", gap: 6, marginTop: 14 },
+  stepBar: { flex: 1, height: 4, borderRadius: 2 },
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 20 },
 });

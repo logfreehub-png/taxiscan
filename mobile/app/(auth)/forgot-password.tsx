@@ -7,8 +7,6 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  TouchableWithoutFeedback,
-  Keyboard,
   Alert,
 } from "react-native";
 import { useRouter, Link } from "expo-router";
@@ -20,7 +18,7 @@ import { Logo } from "@/components/ui/Header";
 import { Field, PhoneField } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { PhoneVerificationModal } from "@/components/PhoneVerificationModal";
+import { PhoneCodeFlow, VerifySession } from "@/components/PhoneCodeFlow";
 import { apiPost } from "@/lib/api/client";
 
 export default function ForgotPasswordScreen() {
@@ -29,66 +27,50 @@ export default function ForgotPasswordScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
 
+  const [step, setStep] = useState<"phone" | "verify" | "password">("phone");
   const [phone, setPhone] = useState("+998");
-  const [step, setStep] = useState<"phone" | "new_password" | "done">("phone");
   const [newPassword, setNewPassword] = useState("");
   const [newPassword2, setNewPassword2] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [session, setSession] = useState<VerifySession | null>(null);
+  const [verifiedCode, setVerifiedCode] = useState("");
 
-  // Telegram bot verification modal
-  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
-  const [verifySession, setVerifySession] = useState<{
-    sessionId: string;
-    botUrl: string;
-    botUsername: string;
-    phone: string;
-  } | null>(null);
+  const firstError = (err: any, fallback: string) => {
+    const data = err?.data;
+    const first = (data && typeof data === "object" && Object.values(data)[0]) || fallback;
+    return Array.isArray(first) ? String(first[0]) : String(first);
+  };
 
-  const handleRequestCode = async () => {
+  const sendCode = async () => {
     const cleanPhone = phone.trim();
-    if (!cleanPhone || cleanPhone.replace(/\D/g, "").length < 9) {
+    if (!cleanPhone || cleanPhone.replace(/\D/g, "").length < 12) {
       setError("Telefon raqam noto'g'ri kiritildi");
       return;
     }
-
     setLoading(true);
     setError(null);
     try {
-      const res = await apiPost<{
-        session_id: string;
-        bot_url: string;
-        bot_username: string;
-      }>(
+      const res = await apiPost<{ session_id: string; bot_url: string; bot_username: string }>(
         "/auth/phone/send-code/",
         { phone: cleanPhone, purpose: "password_reset" },
         { auth: false }
       );
-
-      setVerifySession({
+      setSession({
         sessionId: res.session_id,
         botUrl: res.bot_url,
         botUsername: res.bot_username || "TaxiScan_auth_bot",
         phone: cleanPhone,
       });
-      setVerifyModalOpen(true);
+      setStep("verify");
     } catch (err: any) {
-      const data = err?.data;
-      const first =
-        (data && typeof data === "object" && Object.values(data)[0]) ||
-        "Telefon raqam bo'yicha hisob topilmadi";
-      setError(Array.isArray(first) ? first[0] : String(first));
+      setError(firstError(err, "Telefon raqam bo'yicha hisob topilmadi"));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerified = (sessionId: string) => {
-    setVerifyModalOpen(false);
-    setStep("new_password");
-  };
-
-  const handleSetNewPassword = async () => {
+  const savePassword = async () => {
     if (newPassword.length < 6) {
       setError(t("auth.passwordMinLength"));
       return;
@@ -97,43 +79,55 @@ export default function ForgotPasswordScreen() {
       setError(t("auth.passwordsDoNotMatch"));
       return;
     }
-
     setLoading(true);
     setError(null);
     try {
       await apiPost(
         "/auth/password-reset/phone-confirm/",
         {
-          session_id: verifySession?.sessionId,
-          phone: verifySession?.phone || phone.trim(),
+          session_id: session?.sessionId,
+          phone: session?.phone || phone.trim(),
+          code: verifiedCode,
           new_password: newPassword,
           new_password2: newPassword2,
         },
         { auth: false }
       );
-
-      setStep("done");
+      const goLogin = () => router.replace("/(auth)/login");
+      if (Platform.OS === "web") goLogin();
+      else
+        Alert.alert(t("auth.passwordResetSuccess"), "Endi yangi parolingiz bilan tizimga kiring.", [
+          { text: t("auth.loginBtn"), onPress: goLogin },
+        ]);
     } catch (err: any) {
-      const data = err?.data;
-      const first =
-        (data && typeof data === "object" && Object.values(data)[0]) ||
-        "Parolni yangilashda xatolik yuz berdi";
-      setError(Array.isArray(first) ? first[0] : String(first));
+      setError(firstError(err, "Parolni yangilashda xatolik yuz berdi"));
     } finally {
       setLoading(false);
     }
   };
 
+  const subtitle =
+    step === "phone"
+      ? "Telefon raqamingizni kiriting — Telegram orqali tasdiqlash kodi yuboriladi."
+      : step === "verify"
+      ? "Telefon raqamingizni tasdiqlang"
+      : "Raqam tasdiqlandi. Yangi parol o'rnating.";
+  const stepIndex = step === "phone" ? 0 : step === "verify" ? 1 : 2;
+
+  const errorBox = error ? (
+    <View style={[styles.errorBox, { backgroundColor: colors.redBg }]}>
+      <Text style={{ color: colors.red, fontSize: 13, fontWeight: "600" }}>{error}</Text>
+    </View>
+  ) : null;
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
       style={[styles.flex, { backgroundColor: colors.bg }]}
     >
-      {/* Top Bar with Back Button */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Pressable
-          onPress={() => router.back()}
+          onPress={() => (step === "phone" ? router.back() : setStep(step === "password" ? "verify" : "phone"))}
           hitSlop={10}
           style={[styles.backBtn, { backgroundColor: colors.cardAlt, borderColor: colors.line }]}
         >
@@ -143,140 +137,104 @@ export default function ForgotPasswordScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: insets.bottom + 24 },
-        ]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 24 }]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
       >
-          <View style={styles.logoWrap}>
-            <Logo size={42} />
-            <Text style={[styles.tagline, { color: colors.inkMuted }]}>
-              {t("nav.tagline")}
-            </Text>
+        <View style={styles.logoWrap}>
+          <Logo size={42} />
+          <Text style={[styles.tagline, { color: colors.inkMuted }]}>{t("nav.tagline")}</Text>
+        </View>
+
+        <Card padded>
+          <Text style={[styles.title, { color: colors.ink }]}>{t("auth.resetPasswordTitle")}</Text>
+          <Text style={[styles.subtitle, { color: colors.inkMuted }]}>{subtitle}</Text>
+
+          <View style={styles.stepsRow}>
+            {[0, 1, 2].map((i) => (
+              <View
+                key={i}
+                style={[styles.stepBar, { backgroundColor: i <= stepIndex ? colors.brand : colors.line }]}
+              />
+            ))}
           </View>
 
-          <Card padded>
-            <Text style={[styles.title, { color: colors.ink }]}>
-              {t("auth.resetPasswordTitle")}
-            </Text>
-            <Text style={[styles.subtitle, { color: colors.inkMuted }]}>
-              {step === "new_password"
-                ? "Yangi parolingizni kiriting"
-                : t("auth.resetPasswordSubtitle")}
-            </Text>
-
-            {step === "phone" ? (
-              <View style={{ gap: 14, marginTop: 18 }}>
-                <PhoneField
-                  label={t("auth.phone")}
-                  value={phone}
-                  onChangePhone={(fullPhone) => setPhone(fullPhone)}
-                />
-
-                {error ? (
-                  <View style={[styles.errorBox, { backgroundColor: colors.redBg }]}>
-                    <Text style={{ color: colors.red, fontSize: 13, fontWeight: "600" }}>{error}</Text>
-                  </View>
-                ) : null}
-
-                <Button
-                  title="Tasdiqlash kodini olish"
-                  onPress={handleRequestCode}
-                  loading={loading}
-                />
-              </View>
-            ) : step === "new_password" ? (
-              <View style={{ gap: 14, marginTop: 18 }}>
-                <Field
-                  label={t("auth.newPassword")}
-                  value={newPassword}
-                  onChangeText={setNewPassword}
-                  secureTextEntry
-                  placeholder="••••••••"
-                  leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
-                />
-                <Field
-                  label={t("auth.newPasswordConfirm")}
-                  value={newPassword2}
-                  onChangeText={setNewPassword2}
-                  secureTextEntry
-                  placeholder="••••••••"
-                  leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
-                />
-
-                {error ? (
-                  <View style={[styles.errorBox, { backgroundColor: colors.redBg }]}>
-                    <Text style={{ color: colors.red, fontSize: 13, fontWeight: "600" }}>{error}</Text>
-                  </View>
-                ) : null}
-
-                <Button
-                  title="Parolni saqlash"
-                  onPress={handleSetNewPassword}
-                  loading={loading}
-                />
-              </View>
-            ) : (
-              <View style={styles.doneWrap}>
-                <Ionicons name="checkmark-circle" size={60} color="#10B981" />
-                <Text style={[styles.doneTitle, { color: colors.ink }]}>
-                  {t("auth.passwordResetSuccess")}
-                </Text>
-                <Text style={[styles.doneSub, { color: colors.inkMuted }]}>
-                  Endi yangi parolingiz bilan tizimga kirishingiz mumkin.
-                </Text>
-                <Button
-                  title={t("auth.loginBtn")}
-                  onPress={() => router.replace("/(auth)/login")}
-                  style={{ width: "100%", marginTop: 16 }}
-                />
-              </View>
-            )}
-
-            <View style={styles.footer}>
-              <Link href="/(auth)/login" asChild>
-                <Pressable>
-                  <Text style={{ color: colors.brandDark, fontWeight: "800", fontSize: 14 }}>
-                    {t("common.back")} — {t("auth.loginBtn")}
-                  </Text>
-                </Pressable>
-              </Link>
+          {step === "phone" ? (
+            <View style={{ gap: 14, marginTop: 18 }}>
+              <PhoneField
+                label={t("auth.phone")}
+                value={phone}
+                onChangePhone={(fullPhone) => {
+                  setPhone(fullPhone);
+                  if (error) setError(null);
+                }}
+              />
+              {errorBox}
+              <Button title="Kod olish" onPress={sendCode} loading={loading} />
             </View>
-          </Card>
-        </ScrollView>
+          ) : step === "verify" && session ? (
+            <PhoneCodeFlow
+              session={session}
+              onVerified={(code) => {
+                setVerifiedCode(code);
+                setError(null);
+                setStep("password");
+              }}
+              onResend={sendCode}
+              onChangePhone={() => {
+                setError(null);
+                setStep("phone");
+              }}
+            />
+          ) : (
+            <View style={{ gap: 14, marginTop: 18 }}>
+              <View style={[styles.okRow, { backgroundColor: colors.greenBg }]}>
+                <Ionicons name="checkmark-circle" size={18} color={colors.green} />
+                <Text style={{ color: colors.green, fontWeight: "800", fontSize: 13, flex: 1 }}>
+                  {session?.phone} tasdiqlandi
+                </Text>
+              </View>
+              <Field
+                label={t("auth.newPassword")}
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry
+                placeholder="kamida 6 ta belgi"
+                leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
+              />
+              <Field
+                label={t("auth.newPasswordConfirm")}
+                value={newPassword2}
+                onChangeText={setNewPassword2}
+                secureTextEntry
+                placeholder="••••••"
+                leftIcon={<Ionicons name="lock-closed-outline" size={18} color={colors.inkMuted} />}
+              />
+              {errorBox}
+              <Button title="Parolni saqlash" onPress={savePassword} loading={loading} />
+            </View>
+          )}
 
-      {verifySession ? (
-        <PhoneVerificationModal
-          visible={verifyModalOpen}
-          phone={verifySession.phone}
-          sessionId={verifySession.sessionId}
-          botUrl={verifySession.botUrl}
-          botUsername={verifySession.botUsername}
-          onClose={() => setVerifyModalOpen(false)}
-          onVerified={handleVerified}
-          onResend={handleRequestCode}
-        />
-      ) : null}
+          <View style={styles.footer}>
+            <Link href="/(auth)/login" asChild>
+              <Pressable>
+                <Text style={{ color: colors.brandDark, fontWeight: "800", fontSize: 14 }}>
+                  {t("common.back")} — {t("auth.loginBtn")}
+                </Text>
+              </Pressable>
+            </Link>
+          </View>
+        </Card>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: 20,
-    justifyContent: "center",
-  },
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingBottom: 4,
-  },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 20, justifyContent: "center" },
+  topBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingBottom: 4 },
   backBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -286,29 +244,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
   },
-  backTxt: {
-    fontSize: 12,
-    fontWeight: "700",
-  },
+  backTxt: { fontSize: 12, fontWeight: "700" },
   logoWrap: { alignItems: "center", marginBottom: 24 },
   tagline: { fontSize: 13, marginTop: 10, textAlign: "center", maxWidth: 280, lineHeight: 18 },
   title: { fontSize: 22, fontWeight: "900" },
   subtitle: { fontSize: 13, marginTop: 4, lineHeight: 18 },
+  stepsRow: { flexDirection: "row", gap: 6, marginTop: 14 },
+  stepBar: { flex: 1, height: 4, borderRadius: 2 },
+  okRow: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 12, padding: 12 },
   errorBox: { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 20 },
-  doneWrap: {
-    alignItems: "center",
-    paddingVertical: 20,
-    gap: 8,
-  },
-  doneTitle: {
-    fontSize: 18,
-    fontWeight: "900",
-    textAlign: "center",
-  },
-  doneSub: {
-    fontSize: 13,
-    textAlign: "center",
-    lineHeight: 18,
-  },
 });

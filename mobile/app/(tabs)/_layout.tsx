@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/store/auth";
 import { useTheme } from "@/theme";
 import { registerPushToken } from "@/lib/push";
+import { ProfileCompletePrompt } from "@/components/ProfileCompletePrompt";
 
 import { useI18n } from "@/i18n";
 
@@ -42,6 +43,8 @@ export default function TabsLayout() {
       );
 
   return (
+    <>
+    <ProfileCompletePrompt />
     <Tabs
       screenOptions={{
         headerShown: false,
@@ -97,5 +100,6 @@ export default function TabsLayout() {
         }}
       />
     </Tabs>
+    </>
   );
 }

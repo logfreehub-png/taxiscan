@@ -21,10 +21,12 @@ import { Field, PhoneField } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { LanguageSelectModal } from "@/components/LanguageSelectModal";
+import { OtherDeviceModal } from "@/components/OtherDeviceModal";
 
 export default function LoginScreen() {
   const router = useRouter();
   const login = useAuth((s) => s.login);
+  const setUser = useAuth((s) => s.setUser);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
@@ -34,6 +36,8 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [langModalOpen, setLangModalOpen] = useState(false);
+  // Akkaunt boshqa qurilmada ochiq bo'lsa
+  const [otherDevice, setOtherDevice] = useState<{ name?: string } | null>(null);
 
   const submit = async () => {
     setLoading(true);
@@ -48,6 +52,10 @@ export default function LoginScreen() {
           : "/(tabs)";
       router.replace(dest);
     } catch (err: any) {
+      if (err?.status === 409 && err?.data?.code === "other_device") {
+        setOtherDevice({ name: err.data.device_name });
+        return;
+      }
       setError(err?.data?.detail || t("auth.invalidCredentials"));
     } finally {
       setLoading(false);
@@ -139,6 +147,19 @@ export default function LoginScreen() {
             </View>
           </Card>
         </ScrollView>
+
+      <OtherDeviceModal
+        visible={!!otherDevice}
+        phone={phone.trim()}
+        password={password}
+        deviceName={otherDevice?.name}
+        onClose={() => setOtherDevice(null)}
+        onLoggedIn={(u) => {
+          setOtherDevice(null);
+          setUser(u);
+          router.replace("/(tabs)");
+        }}
+      />
 
       <LanguageSelectModal
         visible={langModalOpen}

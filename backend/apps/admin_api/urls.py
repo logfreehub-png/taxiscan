@@ -3,12 +3,14 @@ from .views import (
     DashboardView, UserListView, UserDetailView, TransactionListView,
     DriverPanelSettingsView, AdminDemandView, SendNotificationView,
     NotificationBatchListView, NotificationBatchDeleteView,
+    UserSearchHistoryView,
 )
 
 urlpatterns = [
     path("dashboard/", DashboardView.as_view(), name="admin-dashboard"),
     path("users/", UserListView.as_view(), name="admin-users"),
     path("users/<int:pk>/", UserDetailView.as_view(), name="admin-user-detail"),
+    path("users/<int:pk>/searches/", UserSearchHistoryView.as_view(), name="admin-user-searches"),
     path("transactions/", TransactionListView.as_view(), name="admin-transactions"),
     path("settings/", DriverPanelSettingsView.as_view(), name="admin-settings"),
     path("demand/", AdminDemandView.as_view(), name="admin-demand"),

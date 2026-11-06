@@ -45,18 +45,19 @@ export default function ProfileSetupPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!firstName.trim() || !lastName.trim()) {
-      setError("Ism va familiya majburiy");
-      return;
-    }
+    // Rasmdan tashqari hamma maydon majburiy
+    if (!firstName.trim()) return setError("Ismingizni kiriting");
+    if (!lastName.trim()) return setError("Familiyangizni kiriting");
+    if (!dob) return setError("Tug'ilgan kuningizni kiriting");
+    if (!gender) return setError("Jinsingizni tanlang");
     setLoading(true);
     setError(null);
     try {
       const fd = new FormData();
       fd.append("first_name", firstName.trim());
       fd.append("last_name", lastName.trim());
-      if (dob) fd.append("date_of_birth", dob);
-      if (gender) fd.append("gender", gender);
+      fd.append("date_of_birth", dob);
+      fd.append("gender", gender);
       if (photo) fd.append("avatar", photo);
       await apiUpload("/auth/profile/complete/", fd, "PATCH");
       await loadMe();
@@ -151,7 +152,7 @@ export default function ProfileSetupPage() {
         <p className="text-sm text-ink-muted mt-1">
           {isDriver
             ? "Ism, familiya, yosh, jins va rasm — yo'lovchilar sizni taniydi"
-            : "Bularni keyin ham to'ldirish mumkin"}
+            : "Rasmdan tashqari barcha maydonlar majburiy"}
         </p>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-5">
@@ -167,7 +168,7 @@ export default function ProfileSetupPage() {
                 <Camera size={28} className="text-ink-muted" />
               )}
               <div className="absolute bottom-0 inset-x-0 bg-ink/70 text-white text-[10px] text-center py-1">
-                {photoPreview ? "O'zgartirish" : "Rasm qo'shish"}
+                {photoPreview ? "O'zgartirish" : "Rasm (ixtiyoriy)"}
               </div>
             </div>
             <input
@@ -187,7 +188,7 @@ export default function ProfileSetupPage() {
           {/* Ism / Familiya */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label">Ism</label>
+              <label className="label">Ism *</label>
               <input
                 className="input"
                 placeholder="Ali"
@@ -196,7 +197,7 @@ export default function ProfileSetupPage() {
               />
             </div>
             <div>
-              <label className="label">Familiya</label>
+              <label className="label">Familiya *</label>
               <input
                 className="input"
                 placeholder="Valiyev"
@@ -209,7 +210,7 @@ export default function ProfileSetupPage() {
           {/* Tug'ilgan kun */}
           <div>
             <label className="label flex items-center gap-1">
-              <Calendar size={14} /> Tug'ilgan kun
+              <Calendar size={14} /> Tug'ilgan kun *
             </label>
             <input
               type="date"
@@ -222,7 +223,7 @@ export default function ProfileSetupPage() {
 
           {/* Jins */}
           <div>
-            <label className="label">Jins</label>
+            <label className="label">Jins *</label>
             <div className="grid grid-cols-2 gap-2">
               {(["male", "female"] as const).map((g) => (
                 <button
@@ -259,7 +260,7 @@ export default function ProfileSetupPage() {
               disabled={loading}
               className="w-full text-sm font-semibold text-ink-muted hover:text-ink py-2"
             >
-              Hozircha o'tkazib yuborish
+              Keyinroq
             </button>
           </div>
         </form>

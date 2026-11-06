@@ -217,3 +217,35 @@ class PhoneVerification(models.Model):
     def is_expired(self):
         return timezone.now() > self.expires_at
 
+
+
+class DeviceSession(models.Model):
+    """Foydalanuvchining qurilmadagi login sessiyasi.
+
+    Bitta akkaunt bir vaqtda faqat BITTA qurilmada aktiv bo'ladi.
+    JWT token ichida `sid` (shu sessiya ID'si) bo'ladi — sessiya bekor qilinsa
+    (boshqa qurilmadan tasdiqlab kirilganda yoki logout), eski token ishlamay qoladi.
+    Token muddati juda uzun — foydalanuvchi o'zi chiqmaguncha o'zgarmaydi.
+    """
+    sid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    user = models.ForeignKey("User", on_delete=models.CASCADE, related_name="device_sessions")
+    device_id = models.CharField("Qurilma ID", max_length=100, blank=True, db_index=True)
+    device_name = models.CharField("Qurilma nomi", max_length=150, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    revoke_reason = models.CharField(max_length=30, blank=True)  # logout | other_device
+
+    class Meta:
+        verbose_name = "Qurilma sessiyasi"
+        verbose_name_plural = "Qurilma sessiyalari"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        state = "aktiv" if self.revoked_at is None else f"bekor ({self.revoke_reason})"
+        return f"{self.user.phone} — {self.device_name or self.device_id} [{state}]"
+
+    @property
+    def is_active(self):
+        return self.revoked_at is None

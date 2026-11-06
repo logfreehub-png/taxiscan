@@ -2,6 +2,7 @@ import { create } from "zustand";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { User } from "@/lib/api/types";
 import { apiGet, apiPost, setTokens, clearTokens, getAccessToken } from "@/lib/api/client";
+import { getDeviceInfo } from "@/lib/device";
 
 const USER_KEY = "tn_user";
 const ONBOARDED_KEY = "tn_onboarded";
@@ -27,9 +28,22 @@ interface AuthState {
   loadMe: () => Promise<void>;
   setUser: (u: User | null) => void;
   completeOnboarding: () => Promise<void>;
+  /** 409 code=other_device bo'lsa ApiError tashlanadi (boshqa qurilmada aktiv sessiya) */
   login: (phone: string, password: string) => Promise<User>;
+  /** Eski qurilmani chiqarish uchun Telegramga kod yuborish */
+  forceLoginRequest: (phone: string, password: string) => Promise<ForceLoginSession>;
+  /** Kodni tasdiqlab kirish — eski qurilma chiqariladi (user'ni setUser bilan o'zingiz o'rnatasiz) */
+  forceLoginConfirm: (phone: string, password: string, sessionId: string, code: string) => Promise<User>;
   register: (data: RegisterData) => Promise<User>;
   logout: () => Promise<void>;
+}
+
+export interface ForceLoginSession {
+  session_id: string;
+  phone: string;
+  sent: boolean;
+  bot_url: string;
+  bot_username: string;
 }
 
 async function persistUser(u: User | null) {
@@ -82,7 +96,8 @@ export const useAuth = create<AuthState>()((set, get) => ({
       set({ user: me });
       persistUser(me);
     } catch (err: any) {
-      if (err?.status === 401 || err?.status === 403) {
+      // Faqat token haqiqatan yaroqsiz bo'lsa (401) chiqaramiz — 403/tarmoq xatosida sessiya saqlanadi
+      if (err?.status === 401) {
         set({ user: null });
         await clearTokens();
         await persistUser(null);
@@ -92,9 +107,10 @@ export const useAuth = create<AuthState>()((set, get) => ({
   },
 
   login: async (phone, password) => {
+    const dev = await getDeviceInfo();
     const r = await apiPost<{ access: string; refresh: string }>(
       "/auth/login/",
-      { phone, password },
+      { phone, password, device_id: dev.id, device_name: dev.name },
       { auth: false }
     );
     await setTokens(r.access, r.refresh);
@@ -102,6 +118,23 @@ export const useAuth = create<AuthState>()((set, get) => ({
     set({ user: me });
     await persistUser(me);
     return me;
+  },
+
+  forceLoginRequest: async (phone, password) => {
+    return apiPost<ForceLoginSession>("/auth/login/force/request/", { phone, password }, { auth: false });
+  },
+
+  forceLoginConfirm: async (phone, password, sessionId, code) => {
+    const dev = await getDeviceInfo();
+    const r = await apiPost<{ access: string; refresh: string }>(
+      "/auth/login/force/confirm/",
+      { phone, password, session_id: sessionId, code, device_id: dev.id, device_name: dev.name },
+      { auth: false }
+    );
+    await setTokens(r.access, r.refresh);
+    // User store'ga hali yozilmaydi — "Qurilma chiqarib yuborildi" oynasi ko'rsatilgach
+    // chaqiruvchi setUser() qiladi (aks holda auth layout darhol yo'naltirib yuboradi)
+    return apiGet<User>("/auth/me/");
   },
 
   register: async (data) => {
@@ -117,6 +150,12 @@ export const useAuth = create<AuthState>()((set, get) => ({
   },
 
   logout: async () => {
+    // Serverda shu qurilma sessiyasini yopamiz (xato bo'lsa ham lokal chiqamiz)
+    try {
+      await apiPost("/auth/logout/", {});
+    } catch {
+      /* ignore */
+    }
     await clearTokens();
     set({ user: null });
     await persistUser(null);

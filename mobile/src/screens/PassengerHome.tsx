@@ -19,14 +19,17 @@ import { shadow } from "@/theme/shadow";
 import { useAuth } from "@/store/auth";
 import { MapWebView, type MapMarker, type MapRoute, type MapWebViewHandle } from "@/components/MapWebView";
 import { AddressInput, type AddressValue } from "@/components/AddressInput";
+import { MapPicker } from "@/components/MapPicker";
+import { addRecentAddress } from "@/lib/recentAddresses";
 import { AppDrawer } from "@/components/AppDrawer";
+import { MapNotifButton } from "@/components/MapNotifButton";
 import { ServiceLogo } from "@/components/ui/ServiceLogo";
 import { apiPost } from "@/lib/api/client";
 import { reverseGeocode } from "@/lib/api/geocoding";
 import { formatNum } from "@/lib/format";
 import { openTaxiApp } from "@/lib/openTaxiApp";
 import type { EstimateResponse, ServiceInfo, Tier } from "@/lib/api/types";
-import { useIsPremium, canSearchToday, markSearchUsed } from "@/lib/subscription";
+import { useIsPremium, canSearchToday, markSearchUsed, isFreeVisibleIndex } from "@/lib/subscription";
 import { PaywallSheet } from "@/components/PaywallSheet";
 import { useI18n } from "@/i18n";
 import { useGeoIntentStore } from "@/lib/geoIntent";
@@ -120,6 +123,9 @@ export function PassengerHome() {
   // Modallar
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerModalOpen, setPickerModalOpen] = useState(false);
+  // Ikonka bosilganda to'g'ridan-to'g'ri xaritadan tanlash oynasi
+  const [mapPickerOpen, setMapPickerOpen] = useState(false);
+  const [mapPickerKey, setMapPickerKey] = useState(0);
 
   // Ilova ochilganda turgan joy aniqlanguncha loading ekrani ko'rsatiladi
   const [locating, setLocating] = useState(true);
@@ -309,6 +315,13 @@ export function PassengerHome() {
       }
     }
     setPickerModalOpen(false);
+  };
+
+  // A yoki B ikonkasi bosilganda "Lokatsiyadan tanlash" xaritasini darhol ochish
+  const openMapPickerFor = (index: number | "start") => {
+    setActivePickerIndex(index);
+    setMapPickerKey((k) => k + 1);
+    setMapPickerOpen(true);
   };
 
   // TARIF (Start/Comfort/Comfort+/Biznes) VA MASOFA (A->B->C...) BO'YICHA DYNAMIC NARXLARNI HISOB-KITOB QILISH
@@ -522,6 +535,14 @@ export function PassengerHome() {
 
   // Tarif o'zgarganda narxlarni yangilash (Start, Comfort, Comfort+, Biznes)
   const handleSelectTarif = (selectedTier: Tier) => {
+    // Obunasiz foydalanuvchi faqat "Start" tarifidan foydalanadi
+    if (!isPremium && selectedTier !== "econom") {
+      openPaywall(
+        "Tarif qulflangan",
+        "Bepul rejimda faqat Start tarifi ochiq. Comfort, Comfort+ va Biznes obuna bilan ishlaydi."
+      );
+      return;
+    }
     setTier(selectedTier);
     setSecondsLeft(15);
     if (data) {
@@ -620,7 +641,8 @@ export function PassengerHome() {
 
   // LOKATSIYA GPS TUGMASINING BALANDLIGINI DINAMIK HISOB-KITOB QILISH
   const visibleInputRowsCount = Math.min(totalInputRows, 3);
-  const bottomCardDynamicHeight = 110 + (visibleInputRowsCount * 54) + (calculated ? 95 : 0);
+  // Manzil tanlanmaguncha tariflar qatori yashirin (faqat "Taqqoslash" tugmasi) — 56px kamroq
+  const bottomCardDynamicHeight = 110 + (visibleInputRowsCount * 54) + (calculated ? 95 : -56);
   const gpsBottomOffset = (insets.bottom || 0) + bottomCardDynamicHeight + 16;
 
   // DYNAMIC KUN / TUN (LIGHT / DARK) THEME COLORS
@@ -648,13 +670,17 @@ export function PassengerHome() {
       {/* 2. TEPAGI HEADER VA O'NG BURCHAKDAGI TAXI NARXLARI KARTASI */}
       <View style={[styles.topHeader, { paddingTop: insets.top + 8, pointerEvents: "box-none" } as any]}>
         {/* Chap burchakda Hamburger Menu Tugmasi (Header ichida faqat Menu ikonkasi) */}
-        <Pressable
-          onPress={() => setMenuOpen(true)}
-          style={[styles.hamburgerBtn, { backgroundColor: cardBg, borderColor: cardBorder }]}
-          hitSlop={12}
-        >
-          <Ionicons name="menu-sharp" size={26} color={textPrimary} />
-        </Pressable>
+        {/* Chap ustun: hamburger + uning tagida xabarlar tugmasi */}
+        <View>
+          <Pressable
+            onPress={() => setMenuOpen(true)}
+            style={[styles.hamburgerBtn, { backgroundColor: cardBg, borderColor: cardBorder }]}
+            hitSlop={12}
+          >
+            <Ionicons name="menu-sharp" size={26} color={textPrimary} />
+          </Pressable>
+          <MapNotifButton backgroundColor={cardBg} borderColor={cardBorder} iconColor={textPrimary} />
+        </View>
 
         {/* O'ng burchakdagi Taksi Narxlari Kartasi */}
         <View style={styles.topRightCardWrap}>
@@ -688,7 +714,7 @@ export function PassengerHome() {
               <ActivityIndicator color="#FFCC00" size="small" style={{ paddingVertical: 14 }} />
             ) : (
               quickRates.map((item, idx) => {
-                const locked = !isPremium && idx >= 2;
+                const locked = !isPremium && !isFreeVisibleIndex(idx);
                 return (
                   <Pressable
                     key={idx}
@@ -759,7 +785,9 @@ export function PassengerHome() {
                 setPickerModalOpen(true);
               }}
             >
-              <View style={styles.yellowDotCircle} />
+              <Pressable onPress={() => openMapPickerFor("start")} hitSlop={12} style={styles.mapIconBtn}>
+                <View style={styles.yellowDotCircle} />
+              </Pressable>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={[styles.routeLabel, { color: textMuted }]}>{t("passenger.from")} (A)</Text>
                 <Text style={[styles.routeValue, { color: textPrimary }]} numberOfLines={1}>
@@ -780,7 +808,9 @@ export function PassengerHome() {
                   <View style={[styles.verticalDashedLine, { borderColor: textMuted }]} />
 
                   <View style={styles.routeRow}>
-                    <Ionicons name="location-sharp" size={20} color="#FFCC00" />
+                    <Pressable onPress={() => openMapPickerFor(idx)} hitSlop={12} style={styles.mapIconBtn}>
+                      <Ionicons name="location-sharp" size={20} color="#FFCC00" />
+                    </Pressable>
                     <Pressable
                       style={{ flex: 1, marginLeft: 14 }}
                       onPress={() => {
@@ -859,10 +889,11 @@ export function PassengerHome() {
               </View>
             ) : null}
 
-            {/* TARIFLARNI TANLASH QATORI (Start, Comfort, Comfort+, Biznes) */}
+            {/* TARIFLARNI TANLASH QATORI (Start, Comfort, Comfort+, Biznes) — obunasiz faqat Start ochiq */}
             <View style={styles.tarifRowContainer}>
               {TARIFS_LIST.map((tItem) => {
                 const active = tier === tItem.key;
+                const tierLocked = !isPremium && tItem.key !== "econom";
                 return (
                   <Pressable
                     key={tItem.key}
@@ -870,9 +901,13 @@ export function PassengerHome() {
                       styles.tarifPillBtn,
                       { backgroundColor: cardBg },
                       active && styles.tarifPillBtnActive,
+                      tierLocked && { opacity: 0.6 },
                     ]}
                     onPress={() => handleSelectTarif(tItem.key)}
                   >
+                    {tierLocked ? (
+                      <Ionicons name="lock-closed" size={11} color="#FFCC00" style={{ marginRight: 3 }} />
+                    ) : null}
                     <Text style={[styles.tarifPillTxt, active && styles.tarifPillTxtActive]}>
                       {tItem.label}
                     </Text>
@@ -883,27 +918,6 @@ export function PassengerHome() {
           </View>
         ) : (
           <View style={{ gap: 8 }}>
-            {/* TARIFLARNI TANLASH QATORI (Start, Comfort, Comfort+, Biznes) */}
-            <View style={styles.tarifRowContainer}>
-              {TARIFS_LIST.map((tItem) => {
-                const active = tier === tItem.key;
-                return (
-                  <Pressable
-                    key={tItem.key}
-                    style={[
-                      styles.tarifPillBtn,
-                      { backgroundColor: cardBg },
-                      active && styles.tarifPillBtnActive,
-                    ]}
-                    onPress={() => handleSelectTarif(tItem.key)}
-                  >
-                    <Text style={[styles.tarifPillTxt, active && styles.tarifPillTxtActive]}>
-                      {tItem.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
 
             {/* KATTA SARIQ "NARXLARNI TAQQOSLASH" TUGMASI */}
             <Pressable
@@ -959,6 +973,24 @@ export function PassengerHome() {
         showLocate={activePickerIndex === "start"}
       />
 
+      {/* 6b. IKONKA BOSILGANDA — TO'G'RIDAN-TO'G'RI XARITADAN TANLASH */}
+      <MapPicker
+        key={mapPickerKey}
+        visible={mapPickerOpen}
+        title={
+          activePickerIndex === "start"
+            ? `${t("passenger.from")} (A)`
+            : `${t("passenger.to")} (${String.fromCharCode(66 + Number(activePickerIndex))})`
+        }
+        initial={activePickerIndex === "start" ? start : destinations[Number(activePickerIndex)] || null}
+        onClose={() => setMapPickerOpen(false)}
+        onConfirm={(v) => {
+          setMapPickerOpen(false);
+          addRecentAddress(v);
+          handleConfirmAddress(v);
+        }}
+      />
+
       {/* 7. PAYWALL — qulflangan funksiyalar uchun obuna taklifi */}
       <PaywallSheet
         visible={paywall}
@@ -972,6 +1004,7 @@ export function PassengerHome() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  mapIconBtn: { width: 24, alignItems: "center", justifyContent: "center" },
 
   /* Header */
   topHeader: {
@@ -1231,6 +1264,7 @@ const styles = StyleSheet.create({
   },
   tarifPillBtn: {
     flex: 1,
+    flexDirection: "row",
     height: 48,
     borderRadius: 14,
     borderWidth: 1,

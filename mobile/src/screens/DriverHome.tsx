@@ -8,11 +8,12 @@ import { shadow } from "@/theme/shadow";
 import { ServiceLogo } from "@/components/ui/ServiceLogo";
 import { MapWebView, type MapZone } from "@/components/MapWebView";
 import { AppDrawer } from "@/components/AppDrawer";
+import { MapNotifButton } from "@/components/MapNotifButton";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { formatUzs, formatNum } from "@/lib/format";
 import { openDriverTaxiApp } from "@/lib/openTaxiApp";
 import type { EstimateResponse, Region, Tier, DemandResponse, DemandRegion } from "@/lib/api/types";
-import { useIsPremium } from "@/lib/subscription";
+import { useIsPremium, isFreeVisibleIndex } from "@/lib/subscription";
 import { PaywallSheet } from "@/components/PaywallSheet";
 import { useI18n } from "@/i18n";
 
@@ -212,13 +213,17 @@ export function DriverHome() {
 
       {/* 2. TEPA: HAMBURGER MENYU + O'NGDA "KIM KO'P TO'LAYDI" NARX KARTASI */}
       <View style={[styles.topHeader, { paddingTop: insets.top + 8, pointerEvents: "box-none" } as any]}>
-        <Pressable
-          onPress={() => setMenuOpen(true)}
-          style={[styles.hamburgerBtn, { backgroundColor: cardBg, borderColor: cardBorder }]}
-          hitSlop={12}
-        >
-          <Ionicons name="menu-sharp" size={26} color={textPrimary} />
-        </Pressable>
+        {/* Chap ustun: hamburger + uning tagida xabarlar tugmasi */}
+        <View>
+          <Pressable
+            onPress={() => setMenuOpen(true)}
+            style={[styles.hamburgerBtn, { backgroundColor: cardBg, borderColor: cardBorder }]}
+            hitSlop={12}
+          >
+            <Ionicons name="menu-sharp" size={26} color={textPrimary} />
+          </Pressable>
+          <MapNotifButton backgroundColor={cardBg} borderColor={cardBorder} iconColor={textPrimary} />
+        </View>
 
         <View style={styles.topRightCardWrap}>
           <Pressable
@@ -249,8 +254,8 @@ export function DriverHome() {
               <ActivityIndicator color="#FFCC00" size="small" style={{ paddingVertical: 14 }} />
             ) : sorted.length > 0 ? (
               sorted.map((r, idx) => {
-                // Bepul haydovchi faqat 2 ta taksini ko'radi, qolgani qulflangan
-                const locked = !isPremium && idx >= 2;
+                // Bepul haydovchi faqat 3- va 4-taksini ko'radi, qolgani qulflangan
+                const locked = !isPremium && !isFreeVisibleIndex(idx);
                 return (
                   <Pressable
                     key={r.service.id}

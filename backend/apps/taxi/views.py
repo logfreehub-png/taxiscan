@@ -15,6 +15,7 @@ from .serializers import (
 from . import services as taxi_services
 from . import routing as taxi_routing
 from . import demand as taxi_demand
+from .history import record_route_search, record_local_search
 from datetime import timedelta
 from .providers.formula import calculate_price, current_surge, tashkent_now
 
@@ -67,6 +68,7 @@ class EstimateView(APIView):
             stops=d.get("stops") or [],
             searcher_key=_searcher_key(request),
         )
+        record_route_search(request.user, d, result)
         return Response(result)
 
 
@@ -82,6 +84,7 @@ class QuickLocalView(APIView):
             lng=d["lng"],
             sample_distance_km=d["sample_distance_km"],
         )
+        record_local_search(request.user, d["lat"], d["lng"], result)
         return Response(result)
 
 

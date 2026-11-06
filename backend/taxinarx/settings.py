@@ -146,7 +146,8 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # REST Framework
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # Qurilma sessiyasiga bog'langan JWT (bitta akkaunt — bitta qurilma)
+        "apps.users.authentication.SessionJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -160,8 +161,10 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=7),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
+    # Token foydalanuvchi o'zi chiqmaguncha (logout) yoki boshqa qurilmadan
+    # tasdiqlab kirilmaguncha ishlaydi — muddat amalda cheklanmagan.
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=3650),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=3650),
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 

@@ -8,6 +8,39 @@ import { useAuth } from "@/store/auth";
 import { NotificationProvider } from "@/lib/notifications";
 import { LanguageProvider } from "@/i18n";
 import { parseLocationUri, useGeoIntentStore } from "@/lib/geoIntent";
+import { Alert } from "react-native";
+import { onSessionRevoked, clearTokens } from "@/lib/api/client";
+
+/**
+ * Akkauntga boshqa qurilmadan (kod bilan tasdiqlab) kirilsa — server shu qurilma
+ * tokenini bekor qiladi. Birinchi 401 "session_revoked" javobida foydalanuvchini
+ * chiqarib, sababini ko'rsatamiz.
+ */
+function SessionRevokedListener() {
+  const router = useRouter();
+  const setUser = useAuth((s) => s.setUser);
+
+  useEffect(() => {
+    let handling = false;
+    onSessionRevoked(async (message) => {
+      if (handling) return;
+      handling = true;
+      await clearTokens();
+      setUser(null);
+      try {
+        router.replace("/(auth)/login");
+      } catch {
+        /* navigator hali tayyor emas */
+      }
+      Alert.alert("Akkauntdan chiqarildingiz", message, [
+        { text: "OK", onPress: () => { handling = false; } },
+      ]);
+    });
+    return () => onSessionRevoked(null);
+  }, [router, setUser]);
+
+  return null;
+}
 
 /**
  * Telegram, WhatsApp yoki boshqa ilovalardan ulashilgan lokatsiya
@@ -53,6 +86,7 @@ function RootNavigator() {
     <>
       <StatusBar style={isDark ? "light" : "dark"} />
       <GeoIntentListener />
+      <SessionRevokedListener />
       <Stack
         screenOptions={{
           headerShown: false,

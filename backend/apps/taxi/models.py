@@ -238,3 +238,40 @@ class SiteSetting(models.Model):
     def get_solo(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class SearchHistory(models.Model):
+    """Foydalanuvchining har bir qidiruvi (admin panelda tarix sifatida ko'rinadi).
+
+    kind="route" — A nuqtadan B (va oraliq) nuqtaga narx qidirgan.
+    kind="local" — turgan joyida ("Joyda") narxlarni ko'rgan.
+    """
+    KIND_CHOICES = [("route", "Marshrut"), ("local", "Turgan joyda")]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="search_history"
+    )
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES, default="route")
+    start_lat = models.FloatField()
+    start_lng = models.FloatField()
+    start_address = models.CharField(max_length=255, blank=True)
+    end_lat = models.FloatField(null=True, blank=True)
+    end_lng = models.FloatField(null=True, blank=True)
+    end_address = models.CharField(max_length=255, blank=True)
+    stops = models.JSONField(default=list, blank=True)
+    distance_km = models.FloatField(null=True, blank=True)
+    duration_min = models.FloatField(null=True, blank=True)
+    min_price_uzs = models.PositiveIntegerField(null=True, blank=True)
+    max_price_uzs = models.PositiveIntegerField(null=True, blank=True)
+    # Kartada chizish uchun yo'l geometriyasi: [[lng, lat], ...]
+    route_coords = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "Qidiruv tarixi"
+        verbose_name_plural = "Qidiruv tarixi"
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.user_id} {self.kind} {self.created_at:%Y-%m-%d %H:%M}"

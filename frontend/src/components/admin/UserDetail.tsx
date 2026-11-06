@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiPatch } from "@/lib/api/client";
+import { UserSearchHistory } from "./UserSearchHistory";
 import { Spinner } from "@/components/ui/Spinner";
 import { formatUzs, formatDateTime } from "@/lib/format";
 import {
@@ -296,6 +297,9 @@ export function UserDetail({ id, backHref }: { id: string; backHref: string }) {
           </div>
         )}
       </div>
+
+      {/* Qidiruv tarixi + qurilmalar */}
+      <UserSearchHistory userId={id} />
 
       {/* Transactions */}
       <div className="card p-5">

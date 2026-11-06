@@ -328,3 +328,49 @@ class TransactionListView(generics.ListAPIView):
                 Q(description__icontains=search)
             )
         return qs.order_by("-created_at")
+
+
+class UserSearchHistoryView(APIView):
+    """Foydalanuvchining qidiruv tarixi (eng yangisi tepada) + qurilma sessiyalari."""
+    permission_classes = [IsAdminRole]
+
+    def get(self, request, pk):
+        from apps.taxi.models import SearchHistory
+        from apps.users.models import DeviceSession
+
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", 200)), 1000))
+        except ValueError:
+            limit = 200
+        qs = SearchHistory.objects.filter(user_id=pk).order_by("-created_at")
+        items = [
+            {
+                "id": h.id,
+                "kind": h.kind,
+                "start": {"lat": h.start_lat, "lng": h.start_lng, "address": h.start_address},
+                "end": (
+                    {"lat": h.end_lat, "lng": h.end_lng, "address": h.end_address}
+                    if h.end_lat is not None else None
+                ),
+                "stops": h.stops,
+                "distance_km": h.distance_km,
+                "duration_min": h.duration_min,
+                "min_price_uzs": h.min_price_uzs,
+                "max_price_uzs": h.max_price_uzs,
+                "route_coords": h.route_coords,
+                "created_at": h.created_at,
+            }
+            for h in qs[:limit]
+        ]
+        sessions = [
+            {
+                "device_name": s.device_name or "Noma'lum qurilma",
+                "ip_address": s.ip_address,
+                "created_at": s.created_at,
+                "last_seen": s.last_seen,
+                "active": s.revoked_at is None,
+                "revoke_reason": s.revoke_reason,
+            }
+            for s in DeviceSession.objects.filter(user_id=pk).order_by("-created_at")[:10]
+        ]
+        return Response({"count": qs.count(), "results": items, "sessions": sessions})

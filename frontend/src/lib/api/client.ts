@@ -28,6 +28,45 @@ export function clearTokens() {
   localStorage.removeItem(REFRESH_KEY);
 }
 
+const DEVICE_ID_KEY = "tn_device_id";
+export const REVOKED_FLAG_KEY = "tn_session_revoked";
+
+/** Brauzerning barqaror qurilma ID'si va nomi (bitta akkaunt — bitta qurilma). */
+export function getDeviceInfo(): { id: string; name: string } {
+  if (typeof window === "undefined") return { id: "", name: "" };
+  let id = "";
+  try {
+    id = localStorage.getItem(DEVICE_ID_KEY) || "";
+    if (!id) {
+      id = "w-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+  } catch {
+    /* ignore */
+  }
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "Brauzer";
+  const os = /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Mac OS/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "";
+  return { id, name: `${browser}${os ? " · " + os : ""} (web)` };
+}
+
+/**
+ * Akkauntga boshqa qurilmadan kirilgan — token bekor qilingan.
+ * Tokenni tozalab, login sahifasiga sabab bilan yuboramiz.
+ */
+function handleRevoked(status: number, data: any) {
+  if (typeof window === "undefined") return;
+  if (status !== 401 || !data || typeof data !== "object" || data.code !== "session_revoked") return;
+  clearTokens();
+  try {
+    localStorage.removeItem("tn-auth");
+    sessionStorage.setItem(REVOKED_FLAG_KEY, data.detail || "Akkauntingizga boshqa qurilmadan kirildi.");
+  } catch {
+    /* ignore */
+  }
+  if (!window.location.pathname.startsWith("/login")) window.location.href = "/login?revoked=1";
+}
+
 export class ApiError extends Error {
   status: number;
   data: any;
@@ -62,7 +101,10 @@ export async function api<T = any>(
     try { body = JSON.parse(text); } catch { body = text; }
   }
 
-  if (!res.ok) throw new ApiError(res.status, body);
+  if (!res.ok) {
+    if (auth) handleRevoked(res.status, body);
+    throw new ApiError(res.status, body);
+  }
   return body as T;
 }
 
@@ -97,6 +139,9 @@ export async function apiUpload<T = any>(
   if (text) {
     try { body = JSON.parse(text); } catch { body = text; }
   }
-  if (!res.ok) throw new ApiError(res.status, body);
+  if (!res.ok) {
+    handleRevoked(res.status, body);
+    throw new ApiError(res.status, body);
+  }
   return body as T;
 }

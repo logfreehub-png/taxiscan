@@ -12,7 +12,7 @@ import { Radar, RefreshCcw, TrendingUp, MapPin, Crown, Layers, Banknote, Users, 
 import { formatUzs, formatNum } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { TierPicker } from "@/components/TierPicker";
-import { useIsPremium, FREE_VISIBLE_SERVICES } from "@/lib/subscription";
+import { useIsPremium, FREE_VISIBLE_SERVICES, isFreeVisibleIndex } from "@/lib/subscription";
 import { PaywallModal } from "@/components/PaywallModal";
 import type { Tier, DemandResponse, DemandRegion } from "@/lib/api/types";
 
@@ -541,7 +541,7 @@ export default function DriverHome() {
                 </div>
               ) : sortedByPrice.length > 0 ? (
                 <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-                  {(isPremium ? sortedByPrice : sortedByPrice.slice(0, FREE_VISIBLE_SERVICES)).map((r, i) => (
+                  {sortedByPrice.map((r, i) => (isPremium || isFreeVisibleIndex(i)) && (
                     <div
                       key={r.service.id}
                       className={`shrink-0 flex items-center gap-2 px-3 py-2.5 rounded-2xl shadow-lg border ${
@@ -558,14 +558,14 @@ export default function DriverHome() {
                       {i === 0 && <Crown size={15} className="text-ink" />}
                     </div>
                   ))}
-                  {!isPremium && sortedByPrice.length > FREE_VISIBLE_SERVICES && (
+                  {!isPremium && sortedByPrice.some((_, i) => !isFreeVisibleIndex(i)) && (
                     <button
                       onClick={() =>
                         openPaywall("Taksilar qulflangan", "Barcha taksilar narxini ko'rish uchun obuna bo'ling.")
                       }
                       className="shrink-0 flex items-center gap-2 px-3 py-2.5 rounded-2xl shadow-lg border border-ink-line bg-white dark:bg-[rgb(var(--surface))] text-brand-700 font-bold text-sm"
                     >
-                      <Lock size={15} /> +{sortedByPrice.length - FREE_VISIBLE_SERVICES} · Obuna
+                      <Lock size={15} /> +{sortedByPrice.filter((_, i) => !isFreeVisibleIndex(i)).length} · Obuna
                     </button>
                   )}
                 </div>

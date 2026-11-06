@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/theme";
 import { useAuth } from "@/store/auth";
 import { useIsPremium } from "@/lib/subscription";
+import { useProfilePrompt } from "@/components/ProfileCompletePrompt";
 
 const LOGO = require("@/assets/logo.png");
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -38,6 +39,8 @@ export function AppDrawer({
   const user = useAuth((s) => s.user);
   const isPremium = useIsPremium();
   const { t } = useI18n();
+  const openProfileForm = useProfilePrompt((s) => s.openForm);
+  const profileIncomplete = !!user && !user.profile_completed && user.role !== "admin";
 
   const isDriver = user?.role === "driver";
   const roleLabel = isDriver
@@ -103,6 +106,26 @@ export function AppDrawer({
           </View>
 
           <View style={styles.menuBtns}>
+            {/* PROFIL TO'LDIRILMAGAN — eslatma */}
+            {profileIncomplete ? (
+              <Pressable
+                style={[styles.menuItem, { backgroundColor: colors.brand + "22", borderWidth: 1.5, borderColor: colors.brand }]}
+                onPress={() => {
+                  onClose();
+                  openProfileForm();
+                }}
+              >
+                <View style={[styles.menuIcon, { backgroundColor: "#FFCC00" }]}>
+                  <Ionicons name="alert-circle-outline" size={22} color="#0F1216" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.menuTitle, { color: textPrimary }]}>Ma'lumotlarni to'ldirish</Text>
+                  <Text style={[styles.menuSub, { color: textMuted }]}>Profilingiz to'liq emas</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={textMuted} />
+              </Pressable>
+            ) : null}
+
             {/* PROFIL */}
             <Pressable
               style={[styles.menuItem, { backgroundColor: inputBg }]}
@@ -201,5 +224,11 @@ const styles = StyleSheet.create({
   menuIcon: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   menuTitle: { fontSize: 16, fontWeight: "800" },
   menuSub: { fontSize: 11, marginTop: 2 },
-  footer: { fontSize: 12, textAlign: "center", marginBottom: 24 },
+  footer: { fontSize: 12, textAlign: "center", marginBottom: 24, marginTop: 12 },
+  inboxItem: { borderWidth: 1 },
+  inboxBadge: {
+    position: "absolute", top: -5, right: -5, minWidth: 20, height: 20, borderRadius: 10,
+    paddingHorizontal: 4, alignItems: "center", justifyContent: "center", borderWidth: 2,
+  },
+  inboxBadgeTxt: { color: "#fff", fontSize: 10, fontWeight: "900" },
 });

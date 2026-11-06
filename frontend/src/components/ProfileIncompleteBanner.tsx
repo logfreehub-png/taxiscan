@@ -3,87 +3,85 @@
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/store/auth";
-import { UserCircle, AlertTriangle, X } from "lucide-react";
+import { UserCircle, UserPlus } from "lucide-react";
 
-const DISMISS_KEY = "tn_profile_banner_dismissed";
+const ASKED_KEY = "tn_profile_prompt_asked";
 
 /**
- * Banner — profil to'liq emasligini ko'rsatadi.
- * - Trial muddat tugamaguncha "Keyinroq" tugmasi bilan yopib qo'yish mumkin
- * - Trial tugagandan keyin majburiy (yopa olmaydi)
+ * Profil to'ldirilmagan bo'lsa (bepul ham, obunali ham):
+ *  - kirishda "Ma'lumotlaringizni to'ldiring" oynasi chiqadi;
+ *  - "Keyinroq" bosilsa oyna yopiladi, lekin sahifa tepasida
+ *    "Ma'lumotlaringizni to'ldiring" eslatmasi to'ldirilmaguncha turadi.
  */
 export function ProfileIncompleteBanner() {
   const { user } = useAuth();
-  const [dismissed, setDismissed] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
+
+  const needs = !!user && !user.profile_completed && user.role !== "admin";
 
   useEffect(() => {
-    setDismissed(sessionStorage.getItem(DISMISS_KEY) === "1");
-  }, []);
+    if (!needs) return;
+    let asked = false;
+    try {
+      asked = sessionStorage.getItem(ASKED_KEY) === "1";
+    } catch {
+      /* ignore */
+    }
+    if (!asked) setAskOpen(true);
+  }, [needs]);
 
-  if (!user) return null;
-  if (user.profile_completed) return null;
+  if (!needs) return null;
 
-  // Admin uchun banner kerakmas
-  if (user.role === "admin") return null;
-
-  const sub = user.subscription;
-  const isTrialActive = sub?.status === "trial" && sub?.is_active && (sub?.days_left ?? 0) > 0;
-  const canDismiss = isTrialActive;
-
-  if (canDismiss && dismissed) return null;
-
-  const handleDismiss = () => {
-    sessionStorage.setItem(DISMISS_KEY, "1");
-    setDismissed(true);
+  const later = () => {
+    try {
+      sessionStorage.setItem(ASKED_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setAskOpen(false);
   };
 
   return (
-    <div
-      className={`rounded-2xl border-2 p-4 mb-4 flex items-center gap-3 animate-fade-in ${
-        canDismiss
-          ? "bg-brand/15 border-brand/40"
-          : "bg-red-50 border-red-300"
-      }`}
-    >
-      <div
-        className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center ${
-          canDismiss ? "bg-brand text-ink" : "bg-red-500 text-white"
-        }`}
-      >
-        {canDismiss ? <UserCircle size={20} /> : <AlertTriangle size={20} />}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-extrabold text-ink text-sm">
-          {canDismiss ? "Profilingizni to'ldiring" : "Profilni to'ldirish majburiy!"}
+    <>
+      <div className="rounded-2xl border-2 p-4 mb-4 flex items-center gap-3 animate-fade-in bg-brand/15 border-brand/40">
+        <div className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center bg-brand text-ink">
+          <UserCircle size={20} />
         </div>
-        <div className="text-xs text-ink-muted mt-0.5">
-          {canDismiss
-            ? `Bepul muddat tugashidan oldin profilingizni to'liq to'ldirishingiz tavsiya etiladi. (${
-                sub?.days_left ?? 0
-              } kun qoldi)`
-            : "Bepul muddat tugadi. Davom etish uchun profilingizni to'ldiring."}
+        <div className="flex-1 min-w-0">
+          <div className="font-extrabold text-ink text-sm">Ma'lumotlaringizni to'ldiring</div>
+          <div className="text-xs text-ink-muted mt-0.5">
+            Ism, familiya, tug'ilgan sana va jinsingizni kiriting — bir daqiqa vaqt oladi.
+          </div>
         </div>
-      </div>
-      <Link
-        href="/profile-setup"
-        className={`text-xs font-bold px-3 py-2 rounded-xl shrink-0 transition ${
-          canDismiss
-            ? "bg-ink text-white hover:bg-ink-soft"
-            : "bg-red-600 text-white hover:bg-red-700"
-        }`}
-      >
-        To'ldirish
-      </Link>
-      {canDismiss && (
-        <button
-          onClick={handleDismiss}
-          className="shrink-0 p-1.5 rounded-md text-ink-muted hover:text-ink hover:bg-ink-line/40"
-          aria-label="Keyinroq"
-          title="Keyinroq"
+        <Link
+          href="/profile-setup"
+          className="text-xs font-bold px-3 py-2 rounded-xl shrink-0 transition bg-ink text-white hover:bg-ink-soft"
         >
-          <X size={14} />
-        </button>
+          To'ldirish
+        </Link>
+      </div>
+
+      {askOpen && (
+        <div className="fixed inset-0 z-[2000] bg-black/60 flex items-center justify-center p-4">
+          <div className="card w-full max-w-sm p-6 text-center animate-fade-in">
+            <div className="mx-auto w-16 h-16 rounded-full bg-brand flex items-center justify-center">
+              <UserPlus size={30} className="text-ink" />
+            </div>
+            <h2 className="mt-4 text-xl font-extrabold text-ink">Ma'lumotlaringizni to'ldiring</h2>
+            <p className="mt-1 text-sm text-ink-muted">
+              Profilingiz to'liq emas. Ism, familiya, tug'ilgan sana va jinsingizni kiriting.
+            </p>
+            <div className="mt-5 space-y-2">
+              <Link href="/profile-setup" onClick={later} className="btn-primary w-full">
+                To'ldirish
+              </Link>
+              <button onClick={later} className="btn-outline w-full">
+                Keyinroq
+              </button>
+            </div>
+          </div>
+        </div>
       )}
-    </div>
+    </>
   );
 }

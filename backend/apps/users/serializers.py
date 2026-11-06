@@ -129,9 +129,26 @@ class ChangePasswordSerializer(serializers.Serializer):
 class ProfileCompletionSerializer(serializers.ModelSerializer):
     """Ro'yxatdan o'tgandan keyin profile to'ldirish."""
 
+    # Rasmdan (avatar) tashqari hamma maydon majburiy
+    first_name = serializers.CharField(max_length=150, allow_blank=False, trim_whitespace=True)
+    last_name = serializers.CharField(max_length=150, allow_blank=False, trim_whitespace=True)
+    date_of_birth = serializers.DateField()
+    gender = serializers.ChoiceField(choices=[("male", "Erkak"), ("female", "Ayol")])
+
     class Meta:
         model = User
         fields = ("first_name", "last_name", "date_of_birth", "gender", "avatar")
+        extra_kwargs = {"avatar": {"required": False}}
+
+    def validate(self, attrs):
+        # PATCH (partial) bo'lsa ham majburiy maydonlar bo'sh qolmasin
+        missing = [
+            f for f in ("first_name", "last_name", "date_of_birth", "gender")
+            if not attrs.get(f) and not getattr(self.instance, f, None)
+        ]
+        if missing:
+            raise serializers.ValidationError({f: "Bu maydon majburiy" for f in missing})
+        return attrs
 
     def update(self, instance, validated_data):
         for k, v in validated_data.items():
