@@ -2,7 +2,7 @@
   "expo": {
     "name": "TaxiScan",
     "slug": "taxiscan",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "scheme": "taxiscan",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
