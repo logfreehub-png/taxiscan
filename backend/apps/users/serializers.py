@@ -68,6 +68,7 @@ class UserSerializer(serializers.ModelSerializer):
     age = serializers.IntegerField(read_only=True)
     full_name = serializers.CharField(read_only=True)
     avatar_url = serializers.SerializerMethodField()
+    is_superadmin = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
@@ -75,10 +76,11 @@ class UserSerializer(serializers.ModelSerializer):
             "id", "phone", "first_name", "last_name", "full_name", "role", "city",
             "avatar", "avatar_url", "date_of_birth", "age", "gender",
             "profile_completed", "home_lat", "home_lng",
-            "has_card", "card_last4", "subscription", "date_joined",
+            "has_card", "card_last4", "subscription", "date_joined", "is_superadmin",
         )
         read_only_fields = ("id", "phone", "role", "date_joined", "subscription",
-                            "age", "full_name", "avatar_url", "profile_completed")
+                            "age", "full_name", "avatar_url", "profile_completed",
+                            "is_superadmin")
 
     def get_subscription(self, obj):
         sub = getattr(obj, "subscription", None)

@@ -216,11 +216,22 @@ class IsAdminRole(permissions.BasePermission):
 
 
 class PromoCodeAdminViewSet(viewsets.ModelViewSet):
-    """Admin: promo-kod yaratish/ko'rish/tahrirlash/o'chirish."""
-    queryset = PromoCode.objects.all()
+    """Admin: promo-kod yaratish/ko'rish/tahrirlash/o'chirish.
+
+    Oddiy admin faqat o'zi yaratgan promo-kodlarni ko'radi; superadmin — hammasini.
+    """
     serializer_class = PromoCodeSerializer
     permission_classes = [IsAdminRole]
     pagination_class = None
+
+    def get_queryset(self):
+        qs = PromoCode.objects.all()
+        if not self.request.user.is_superuser:
+            qs = qs.filter(created_by=self.request.user)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
     def list(self, request, *args, **kwargs):
         data = self.get_serializer(self.get_queryset(), many=True).data

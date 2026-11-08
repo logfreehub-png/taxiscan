@@ -50,6 +50,12 @@ class User(AbstractUser):
     )
     telegram_id = models.BigIntegerField("Telegram ID", null=True, blank=True, db_index=True)
     telegram_username = models.CharField("Telegram Username", max_length=100, blank=True)
+    # Admin akkauntlari uchun — qaysi superadmin yaratganini kuzatish.
+    # Oddiy foydalanuvchilar (yo'lovchi/haydovchi) uchun None bo'ladi.
+    created_by = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="created_admins", verbose_name="Kim yaratgan",
+    )
     last_seen = models.DateTimeField("Oxirgi aktivlik", null=True, blank=True, db_index=True)
     total_seconds_active = models.PositiveIntegerField("Jami aktiv soniyalar", default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -76,6 +82,11 @@ class User(AbstractUser):
     @property
     def is_admin_role(self):
         return self.role == UserRole.ADMIN or self.is_superuser
+
+    @property
+    def is_superadmin(self):
+        """Bosh admin — barcha adminlar va global ma'lumotlarni ko'radi."""
+        return bool(self.is_superuser)
 
     @property
     def age(self):

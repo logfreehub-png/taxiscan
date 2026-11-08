@@ -3,11 +3,16 @@ from .views import (
     DashboardView, UserListView, UserDetailView, TransactionListView,
     DriverPanelSettingsView, AdminDemandView, SendNotificationView,
     NotificationBatchListView, NotificationBatchDeleteView,
-    UserSearchHistoryView,
+    UserSearchHistoryView, AdminAccountsView, AdminAccountDetailView,
+    GlobalSearchHistoryView,
 )
 
 urlpatterns = [
     path("dashboard/", DashboardView.as_view(), name="admin-dashboard"),
+    # Superadmin: adminlarni boshqarish + global qidiruvlar
+    path("admins/", AdminAccountsView.as_view(), name="admin-accounts"),
+    path("admins/<int:pk>/", AdminAccountDetailView.as_view(), name="admin-account-detail"),
+    path("searches/", GlobalSearchHistoryView.as_view(), name="admin-global-searches"),
     path("users/", UserListView.as_view(), name="admin-users"),
     path("users/<int:pk>/", UserDetailView.as_view(), name="admin-user-detail"),
     path("users/<int:pk>/searches/", UserSearchHistoryView.as_view(), name="admin-user-searches"),

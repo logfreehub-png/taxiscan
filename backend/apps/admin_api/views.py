@@ -13,11 +13,12 @@ from apps.taxi import demand as taxi_demand
 from apps.users import notifications as notif_utils
 from apps.users.models import NotificationKind, NotificationBatch, Notification
 
-from .permissions import IsAdminRole
+from .permissions import IsAdminRole, IsSuperAdmin
 from .serializers import (
     AdminUserListSerializer,
     AdminUserDetailSerializer,
     AdminTransactionSerializer,
+    AdminAccountSerializer,
 )
 
 User = get_user_model()
@@ -272,8 +273,12 @@ class NotificationBatchDeleteView(APIView):
     permission_classes = [IsAdminRole]
 
     def delete(self, request, pk):
+        qs = NotificationBatch.objects.all()
+        # Oddiy admin faqat o'zi yuborgan xabarni o'chira oladi
+        if not request.user.is_superuser:
+            qs = qs.filter(created_by=request.user)
         try:
-            b = NotificationBatch.objects.get(id=pk)
+            b = qs.get(id=pk)
         except NotificationBatch.DoesNotExist:
             return Response({"detail": "Topilmadi"}, status=status.HTTP_404_NOT_FOUND)
         Notification.objects.filter(batch=b).delete()
@@ -287,7 +292,11 @@ class NotificationBatchListView(APIView):
 
     def get(self, request):
         out = []
-        for b in NotificationBatch.objects.all()[:50]:
+        batches = NotificationBatch.objects.all()
+        # Oddiy admin faqat o'zi yuborgan xabarlarni ko'radi; superadmin — hammasini.
+        if not request.user.is_superuser:
+            batches = batches.filter(created_by=request.user)
+        for b in batches[:50]:
             read = Notification.objects.filter(batch=b, is_read=True).count()
             out.append({
                 "id": b.id,
@@ -328,6 +337,82 @@ class TransactionListView(generics.ListAPIView):
                 Q(description__icontains=search)
             )
         return qs.order_by("-created_at")
+
+
+class AdminAccountsView(generics.ListCreateAPIView):
+    """Superadmin: admin akkauntlarni ko'rish va yangisini yaratish.
+
+    GET  — superadmin yaratgan barcha adminlar ro'yxati.
+    POST — yangi admin yaratish ({phone, password, first_name?, last_name?}).
+    """
+    serializer_class = AdminAccountSerializer
+    permission_classes = [IsSuperAdmin]
+    pagination_class = None
+
+    def get_queryset(self):
+        # Oddiy admin akkauntlar (superuser emas), eng yangisi tepada.
+        return User.objects.filter(role="admin", is_superuser=False).order_by("-date_joined")
+
+    def list(self, request, *args, **kwargs):
+        data = self.get_serializer(self.get_queryset(), many=True).data
+        return Response({"results": data, "count": len(data)})
+
+
+class AdminAccountDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Superadmin: bitta adminni tahrirlash (faollik) yoki o'chirish."""
+    serializer_class = AdminAccountSerializer
+    permission_classes = [IsSuperAdmin]
+    http_method_names = ["get", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return User.objects.filter(role="admin", is_superuser=False)
+
+
+class GlobalSearchHistoryView(APIView):
+    """Superadmin: barcha yo'lovchi/haydovchilarning oxirgi qidiruvlari (qayerdan → qayerga).
+
+    Eng yangisi tepada. Standart 20 ta (web admin: 2 tasi ko'rinadi, qolgani ochiladi).
+    """
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        from apps.taxi.models import SearchHistory
+
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", 20)), 200))
+        except ValueError:
+            limit = 20
+
+        qs = SearchHistory.objects.select_related("user").order_by("-created_at")
+        role = request.query_params.get("role")
+        if role in ("passenger", "driver"):
+            qs = qs.filter(user__role=role)
+
+        items = [
+            {
+                "id": h.id,
+                "kind": h.kind,
+                "user": {
+                    "id": h.user_id,
+                    "name": h.user.full_name,
+                    "phone": h.user.phone,
+                    "role": h.user.role,
+                },
+                "start": {"lat": h.start_lat, "lng": h.start_lng, "address": h.start_address},
+                "end": (
+                    {"lat": h.end_lat, "lng": h.end_lng, "address": h.end_address}
+                    if h.end_lat is not None else None
+                ),
+                "stops": h.stops,
+                "distance_km": h.distance_km,
+                "duration_min": h.duration_min,
+                "min_price_uzs": h.min_price_uzs,
+                "max_price_uzs": h.max_price_uzs,
+                "created_at": h.created_at,
+            }
+            for h in qs[:limit]
+        ]
+        return Response({"count": qs.count(), "results": items})
 
 
 class UserSearchHistoryView(APIView):

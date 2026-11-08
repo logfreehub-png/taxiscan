@@ -215,6 +215,11 @@ class PromoCode(models.Model):
     used_count = models.PositiveIntegerField("Ishlatilgan", default=0)
     valid_until = models.DateTimeField("Amal qilish muddati", null=True, blank=True)
     is_active = models.BooleanField("Faol", default=True)
+    # Qaysi admin yaratgani — superadmin hammasini, oddiy admin faqat o'zinikini ko'radi.
+    created_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="created_promocodes", verbose_name="Kim yaratgan",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

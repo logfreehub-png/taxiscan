@@ -8,3 +8,12 @@ class IsAdminRole(permissions.BasePermission):
     def has_permission(self, request, view):
         u = request.user
         return bool(u and u.is_authenticated and (u.is_superuser or u.role == "admin"))
+
+
+class IsSuperAdmin(permissions.BasePermission):
+    """Faqat bosh admin (is_superuser) uchun — adminlarni boshqarish, global qidiruvlar."""
+    message = "Bu bo'lim faqat bosh admin uchun"
+
+    def has_permission(self, request, view):
+        u = request.user
+        return bool(u and u.is_authenticated and u.is_superuser)

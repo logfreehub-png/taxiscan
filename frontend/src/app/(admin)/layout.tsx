@@ -19,6 +19,9 @@ import {
   Radar,
   Bell,
   Ticket,
+  UserCog,
+  MapPinned,
+  UserPlus,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme";
 
@@ -30,6 +33,12 @@ const NAV = [
   { href: "/admin/users", label: "Yo'lovchilar", icon: Users },
   { href: "/admin/drivers", label: "Haydovchilar", icon: Car },
   { href: "/admin/transactions", label: "Tranzaksiyalar", icon: Receipt },
+];
+
+// Faqat bosh adminga (superadmin) ko'rinadigan bo'limlar
+const SUPERADMIN_NAV = [
+  { href: "/admin/searches", label: "Qidiruvlar", icon: MapPinned },
+  { href: "/admin/admins", label: "Adminlar", icon: UserCog },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -91,8 +100,41 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </Link>
             );
           })}
+
+          {/* Faqat bosh admin uchun */}
+          {user.is_superadmin && (
+            <>
+              <div className="pt-3 mt-2 border-t border-white/10 px-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-white/40">
+                Bosh admin
+              </div>
+              {SUPERADMIN_NAV.map((n) => {
+                const Icon = n.icon;
+                const active = pathname === n.href || pathname.startsWith(n.href + "/");
+                return (
+                  <Link
+                    key={n.href}
+                    href={n.href}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition ${
+                      active ? "bg-brand text-ink" : "text-white/70 hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    <Icon size={16} /> {n.label}
+                  </Link>
+                );
+              })}
+            </>
+          )}
         </nav>
         <div className="mt-auto space-y-1 pt-4 border-t border-white/10">
+          {/* Bosh adminga — yangi admin yaratish tugmasi (pastda) */}
+          {user.is_superadmin && (
+            <Link
+              href="/admin/admins?new=1"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 mb-1 rounded-xl text-sm font-bold bg-brand text-ink hover:brightness-95 transition"
+            >
+              <UserPlus size={16} /> Admin yaratish
+            </Link>
+          )}
           <button
             onClick={() => setTheme(nextTheme)}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white"

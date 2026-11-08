@@ -38,6 +38,52 @@ class AdminSubscriptionSerializer(serializers.ModelSerializer):
                   "last_charge_at", "next_charge_at")
 
 
+class AdminAccountSerializer(serializers.ModelSerializer):
+    """Superadmin yaratadigan/ko'radigan admin akkaunt."""
+    full_name = serializers.CharField(read_only=True)
+    password = serializers.CharField(write_only=True, min_length=4, required=True)
+    created_by_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ("id", "phone", "first_name", "last_name", "full_name",
+                  "password", "is_active", "date_joined", "last_login",
+                  "created_by", "created_by_name")
+        read_only_fields = ("id", "date_joined", "last_login", "created_by")
+
+    def get_created_by_name(self, obj):
+        return obj.created_by.full_name if obj.created_by_id else None
+
+    def validate_phone(self, value):
+        value = (value or "").strip()
+        qs = User.objects.filter(phone=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Bu telefon raqam band.")
+        return value
+
+    def create(self, validated_data):
+        password = validated_data.pop("password")
+        phone = validated_data["phone"]
+        request = self.context.get("request")
+        user = User(
+            phone=phone,
+            username=phone,
+            role="admin",
+            is_staff=True,
+            is_superuser=False,
+            profile_completed=True,
+            first_name=validated_data.get("first_name", ""),
+            last_name=validated_data.get("last_name", ""),
+            is_active=validated_data.get("is_active", True),
+            created_by=request.user if request else None,
+        )
+        user.set_password(password)
+        user.save()
+        return user
+
+
 class AdminUserListSerializer(serializers.ModelSerializer):
     """User ro'yxati uchun qisqartirilgan serializer."""
     full_name = serializers.CharField(read_only=True)

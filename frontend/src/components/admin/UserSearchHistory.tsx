@@ -58,7 +58,7 @@ export function UserSearchHistory({ userId }: { userId: string | number }) {
 
   useEffect(() => {
     setLoading(true);
-    apiGet<Resp>(`/admin/users/${userId}/searches/`)
+    apiGet<Resp>(`/admin/users/${userId}/searches/?limit=50`)
       .then(setData)
       .catch(() => setData({ count: 0, results: [], sessions: [] }))
       .finally(() => setLoading(false));

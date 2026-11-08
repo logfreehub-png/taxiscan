@@ -19,6 +19,8 @@ export interface User {
   has_card: boolean;
   card_last4: string;
   date_joined: string;
+  /** Bosh admin — barcha adminlar/promo/qidiruvlarni ko'radi (backend is_superuser) */
+  is_superadmin?: boolean;
   subscription: {
     status: string;
     is_active: boolean;
