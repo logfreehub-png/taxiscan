@@ -8,7 +8,7 @@ import { formatUzs, formatNum } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import {
   Users, Car, CreditCard, TrendingUp, Activity,
-  CheckCircle2, XCircle, Clock, RefreshCcw, UserX, AlertCircle,
+  CheckCircle2, XCircle, Clock, RefreshCcw, LogIn, AlertCircle,
 } from "lucide-react";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
@@ -84,12 +84,10 @@ export default function AdminDashboardPage() {
 
       {/* Ro'yxatdan o'tganlar holati */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard
-          icon={<UserX className="text-red-500" size={20} />}
-          label="Hech kirmagan"
-          value={data.users.never_logged_in.toString()}
-          sub="ro'yxatdan o'tgan, lekin kirmaganllar"
-          color="text-red-600"
+        <LoginCard
+          today={data.users.logged_in_today}
+          week={data.users.logged_in_7d}
+          month={data.users.logged_in_30d}
         />
         <StatCard
           icon={<AlertCircle className="text-orange-500" size={20} />}
@@ -209,6 +207,30 @@ function StatCard({ icon, label, value, sub, color = "text-ink" }: any) {
       </div>
       <div className={`text-xl font-extrabold mt-1.5 ${color}`}>{value}</div>
       {sub && <div className="text-xs text-ink-muted mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
+function LoginCard({ today, week, month }: { today: number; week: number; month: number }) {
+  return (
+    <div className="card p-4">
+      <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-ink-muted tracking-wider">
+        <LogIn className="text-green-600" size={20} /> Kirgan foydalanuvchilar
+      </div>
+      <div className="mt-2 space-y-1">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-ink-muted">Kunlik</span>
+          <span className="font-bold text-ink">{today.toLocaleString()}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-ink-muted">Haftalik</span>
+          <span className="font-bold text-ink">{week.toLocaleString()}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-ink-muted">Oylik</span>
+          <span className="font-bold text-ink">{month.toLocaleString()}</span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -47,6 +47,9 @@ class DashboardView(APIView):
         users_new_30 = User.objects.filter(date_joined__gte=d30).count()
         never_logged_in = User.objects.filter(last_login__isnull=True, role__in=["passenger", "driver"]).count()
         profile_incomplete = User.objects.filter(profile_completed=False, role__in=["passenger", "driver"]).count()
+        logged_in_today = User.objects.filter(last_login__gte=d1).count()
+        logged_in_7d = User.objects.filter(last_login__gte=d7).count()
+        logged_in_30d = User.objects.filter(last_login__gte=d30).count()
         active_subs = Subscription.objects.filter(status="active").count()
         trial_subs = Subscription.objects.filter(status="trial").count()
 
@@ -98,6 +101,9 @@ class DashboardView(APIView):
                 "new_30d": users_new_30,
                 "never_logged_in": never_logged_in,
                 "profile_incomplete": profile_incomplete,
+                "logged_in_today": logged_in_today,
+                "logged_in_7d": logged_in_7d,
+                "logged_in_30d": logged_in_30d,
             },
             "subscriptions": {
                 "active": active_subs,
