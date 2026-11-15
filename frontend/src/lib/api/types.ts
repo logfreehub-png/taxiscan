@@ -31,7 +31,7 @@ export interface User {
 }
 
 export interface AdminDashboard {
-  users: { total: number; passengers: number; drivers: number; new_7d: number; new_30d: number; never_logged_in: number; profile_incomplete: number; logged_in_today: number; logged_in_7d: number; logged_in_30d: number };
+  users: { total: number; passengers: number; drivers: number; new_7d: number; new_30d: number; never_logged_in: number; profile_incomplete: number; active_today: number; active_7d: number; active_30d: number };
   subscriptions: { active: number; trial: number };
   revenue: { total_uzs: number; total_usd: number; today_uzs: number; last_7d_uzs: number; last_30d_uzs: number };
   transactions: { total: number; success: number; failed: number; pending: number; refunded: number };

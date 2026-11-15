@@ -85,9 +85,9 @@ export default function AdminDashboardPage() {
       {/* Ro'yxatdan o'tganlar holati */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <LoginCard
-          today={data.users.logged_in_today}
-          week={data.users.logged_in_7d}
-          month={data.users.logged_in_30d}
+          today={data.users.active_today}
+          week={data.users.active_7d}
+          month={data.users.active_30d}
         />
         <StatCard
           icon={<AlertCircle className="text-orange-500" size={20} />}
@@ -215,7 +215,7 @@ function LoginCard({ today, week, month }: { today: number; week: number; month:
   return (
     <div className="card p-4">
       <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-ink-muted tracking-wider">
-        <LogIn className="text-green-600" size={20} /> Kirgan foydalanuvchilar
+        <LogIn className="text-green-600" size={20} /> Faol foydalanuvchilar
       </div>
       <div className="mt-2 space-y-1">
         <div className="flex items-center justify-between text-xs">
