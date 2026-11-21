@@ -40,7 +40,7 @@ Bunday holatda backend Yandex narxini formula bilan hisoblaydi.
 
 ## Telefon talablari
 
-* Yandex Go ilovasida akkaunt bilan kirilgan, interfeys tili o'zbekcha bo'lishi kerak (parser `tarifi`, `soʻm`, `Qayerga` so'zlarini qidiradi).
+* Yandex Go ilovasida akkaunt bilan kirilgan bo'lishi kerak. Ilova tili o'zbekcha, inglizcha yoki ruscha bo'lishi mumkin. Parser har bir tarifga kanonik `code` beradi: `start`, `comfort`, `comfort_plus`, `business`, `electro`, `carpool`.
 * Ekran qulfi o'chirilgan va "Stay awake" yoqilgan bo'lishi kerak. Telefon zaryadda tursa, ekran o'chmaydi.
 * Xiaomi'da: Developer options → **USB debugging (Security settings)** yoqilgan bo'lsin. Busiz ekranni masofadan yoqib bo'lmaydi.
 
@@ -50,6 +50,11 @@ Bunday holatda backend Yandex narxini formula bilan hisoblaydi.
 YANDEX_LIVE_URL=http://<statik-ip>:3060
 YANDEX_LIVE_KEY=<PROBE_API_KEY bilan bir xil>
 YANDEX_LIVE_TIMEOUT=35
+# Bir foydalanuvchi + marshrut uchun telefonga faqat bir marta boriladi;
+# mobil ilovaning 15 soniyalik yangilanishlari shu natijani oladi
+YANDEX_LIVE_REUSE_SECONDS=600
+# Telefon xato bersa, shu marshrutga qayta urinmaslik vaqti
+YANDEX_LIVE_FAIL_SECONDS=120
 ```
 
 Tariflar `apps/taxi/live_yandex.py` dagi `TIER_BY_TARIFF` orqali bog'lanadi:

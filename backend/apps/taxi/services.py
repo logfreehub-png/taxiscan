@@ -169,7 +169,7 @@ def aggregate_estimates(
             and any(live_yandex.is_yandex_service(s) for s in services)):
         live_pool = ThreadPoolExecutor(max_workers=1)
         live_future = live_pool.submit(
-            live_yandex.fetch_quote, start_lat, start_lng, end_lat, end_lng
+            live_yandex.get_quote, searcher_key, start_lat, start_lng, end_lat, end_lng
         )
 
     # Oraliq to'xtashlar (A→...→B) — berilgan bo'lsa bitta yo'l, aks holda alternativlar

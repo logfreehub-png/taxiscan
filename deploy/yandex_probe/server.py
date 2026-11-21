@@ -36,17 +36,33 @@ BASE_DIR = Path(__file__).resolve().parent
 PKG = "ru.yandex.taxi"
 UI_PATH = "/sdcard/taxiscan_ui.xml"
 
-# Masalan:
-#   content-desc="«Start» tarifi, 22000 soʻm, Yetkazish 3 daq"
-#   content-desc="«Komfort» tarifi, Talab yuqori, 25000 soʻm, Yetkazish 3 daq"
-RX_TARIFF = re.compile(r'content-desc="(?:«|&quot;)?([^"«»&]+?)(?:»|&quot;)? tarifi, ([^"]*)"')
-RX_PRICE = re.compile(r"(\d[\d\s]*?)\s*so(?:'|&apos;|&#39;|.)m")
-RX_PICKUP = re.compile(r"Yetkazish (\d+) daq")
-RX_TRIP_MIN = re.compile(r"•\s*(\d+)\s*daq")
-RX_DEMAND = re.compile(r'talab indeksi: ([^"]+)')
-RX_FROM = re.compile(r'content-desc="Manzilingiz, ([^"]*)"')
-RX_TO = re.compile(r'content-desc="Qayerga, ([^"]*)"')
-RX_ARRIVAL = re.compile(r'content-desc="(\d{1,2}:\d{2}) da yakuniy manzilga')
+# Yandex ilovasi tili o'zgarib qolishi mumkin — uz / en / ru qo'llab-quvvatlanadi:
+#   uz: content-desc="«Komfort» tarifi, Talab yuqori, 25000 soʻm, Yetkazish 3 daq"
+#   en: content-desc="Comfort service class, 30,500 sum, Pickup 2 min"
+#   ru: content-desc="Тариф «Комфорт», 30 500 сум, Подача 2 мин"
+RX_TARIFFS = [
+    re.compile(r'content-desc="(?:«|&quot;)?([^"«»&]+?)(?:»|&quot;)? tarifi, ([^"]*)"'),
+    re.compile(r'content-desc="([^",]+?) service class, ([^"]*)"'),
+    re.compile(r'content-desc="[Тт]ариф (?:«|&quot;)?([^"«»&,]+?)(?:»|&quot;)?, ([^"]*)"'),
+]
+RX_PRICE = re.compile(r"(\d[\d\s,.]*?)\s*(?:so(?:'|&apos;|&#39;|.)m|sum|сум)\b", re.I)
+RX_PICKUP = re.compile(r"(?:Yetkazish|Pickup|Подача)\s*(\d+)\s*(?:daq|min|мин)", re.I)
+RX_TRIP_MIN = re.compile(r"•\s*(\d+)\s*(?:daq|min|мин)", re.I)
+RX_DEMAND = re.compile(r'(?:talab indeksi|demand index|индекс спроса): ([^"]+)', re.I)
+# Manzil tugmalari: uz'da "Manzilingiz, ..."/"Qayerga, ...", en'da yorliqsiz ", ..."
+RX_ADDR = re.compile(r'content-desc="(Manzilingiz|Qayerga|Откуда|Куда|Where to|)?, ([^"]*)"')
+RX_ARRIVAL_NODE = re.compile(r'content-desc="([^"]*(?:yakuniy manzil|destination|назначени)[^"]*)"', re.I)
+RX_TIME = re.compile(r"\b(\d{1,2}:\d{2})\b")
+
+# Tarif nomi (har qanday til) -> kanonik kod
+TARIFF_CODES = {
+    "start": "start", "старт": "start", "ekonom": "start", "econom": "start", "эконом": "start",
+    "komfort": "comfort", "comfort": "comfort", "комфорт": "comfort",
+    "komfort+": "comfort_plus", "comfort+": "comfort_plus", "комфорт+": "comfort_plus",
+    "biznes": "business", "business": "business", "бизнес": "business",
+    "elektro": "electro", "electric": "electro", "электро": "electro",
+    "birga": "carpool", "carpool": "carpool", "вместе": "carpool",
+}
 
 # O'zbekiston chegarasi (taxminan) — tashqaridagi koordinatalar rad etiladi
 LAT_RANGE = (37.0, 46.0)
@@ -140,42 +156,46 @@ class Phone:
     def parse(xml: str) -> dict | None:
         tariffs = []
         seen = set()
-        for m in RX_TARIFF.finditer(xml):
-            name = html.unescape(m.group(1)).strip()
-            rest = html.unescape(m.group(2))
-            pm = RX_PRICE.search(rest)
-            price = int(re.sub(r"\D", "", pm.group(1)) or 0) if pm else 0
-            if not name or price <= 0 or name in seen:
-                continue  # narxi hali chiqmagan (masalan «Birga»)
-            seen.add(name)
-            pickup = RX_PICKUP.search(rest)
-            # Narx va yetkazishdan boshqa bo'laklar — masalan "Talab yuqori"
-            notes = [
-                p.strip() for p in rest.split(",")
-                if p.strip() and not RX_PRICE.search(p) and not RX_PICKUP.search(p)
-                and not re.fullmatch(r"[\d\s]+", p.strip())
-            ]
-            tariffs.append({
-                "tariff": name,
-                "price": price,
-                "pickup_min": int(pickup.group(1)) if pickup else None,
-                "notes": notes,
-            })
+        for rx in RX_TARIFFS:
+            for m in rx.finditer(xml):
+                name = html.unescape(m.group(1)).strip()
+                rest = html.unescape(m.group(2))
+                pm = RX_PRICE.search(rest)
+                price = int(re.sub(r"\D", "", pm.group(1)) or 0) if pm else 0
+                if not name or price <= 0 or name in seen:
+                    continue  # narxi hali chiqmagan (masalan «Birga»)
+                seen.add(name)
+                pickup = RX_PICKUP.search(rest)
+                # Narx va yetkazishdan boshqa bo'laklar — masalan "Talab yuqori"
+                leftover = RX_PICKUP.sub("", RX_PRICE.sub("", rest))
+                notes = [p.strip() for p in leftover.split(",") if p.strip()]
+                tariffs.append({
+                    "tariff": name,
+                    "code": TARIFF_CODES.get(name.lower()),
+                    "price": price,
+                    "pickup_min": int(pickup.group(1)) if pickup else None,
+                    "notes": notes,
+                })
         if not tariffs:
             return None
 
-        def g(rx):
-            m = rx.search(xml)
-            return html.unescape(m.group(1)).strip() if m else ""
-
-        to_raw = g(RX_TO)
-        trip = RX_TRIP_MIN.search(to_raw)
+        frm = to = ""
+        for m in RX_ADDR.finditer(xml):
+            label, value = m.group(1) or "", html.unescape(m.group(2))
+            if label in ("Qayerga", "Куда", "Where to") or "•" in value:
+                to = to or value
+            elif not frm:
+                frm = value
+        trip = RX_TRIP_MIN.search(to)
+        arrival_node = RX_ARRIVAL_NODE.search(xml)
+        arrival = RX_TIME.search(arrival_node.group(1)) if arrival_node else None
+        demand = RX_DEMAND.search(xml)
         return {
-            "from": g(RX_FROM).strip(" ,"),
-            "to": to_raw.split("•")[0].strip(" ,"),
+            "from": frm.strip(" ,"),
+            "to": to.split("•")[0].strip(" ,"),
             "trip_min": int(trip.group(1)) if trip else None,
-            "arrival": g(RX_ARRIVAL) or None,
-            "demand": g(RX_DEMAND),
+            "arrival": arrival.group(1) if arrival else None,
+            "demand": html.unescape(demand.group(1)).strip() if demand else "",
             "tariffs": tariffs,
         }
 

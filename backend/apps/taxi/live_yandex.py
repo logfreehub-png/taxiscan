@@ -3,24 +3,28 @@
 aggregate_estimates() buni OSRM bilan parallel chaqiradi. Servis o'chiq, band
 yoki sekin bo'lsa None qaytadi va Yandex narxi formula bilan hisoblanadi.
 """
+import hashlib
 import logging
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-# Yandex ilovasidagi tarif nomi -> TaxiService.tier
-TIER_BY_TARIFF = {
+# Probe servisi beradigan kanonik kod -> TaxiService.tier
+TIER_BY_CODE = {
     "start": "econom",
-    "ekonom": "econom",
-    "econom": "econom",
-    "komfort": "comfort",
     "comfort": "comfort",
-    "komfort+": "comfort_plus",
-    "comfort+": "comfort_plus",
-    "biznes": "business",
+    "comfort_plus": "comfort_plus",
     "business": "business",
+}
+# Zaxira: kod kelmasa, tarif nomi bo'yicha (ilova tili uz / en / ru bo'lishi mumkin)
+TIER_BY_TARIFF = {
+    "start": "econom", "старт": "econom", "ekonom": "econom", "econom": "econom",
+    "komfort": "comfort", "comfort": "comfort", "комфорт": "comfort",
+    "komfort+": "comfort_plus", "comfort+": "comfort_plus", "комфорт+": "comfort_plus",
+    "biznes": "business", "business": "business", "бизнес": "business",
 }
 
 YANDEX_CODE_PREFIX = "yandex_go__"
@@ -59,11 +63,38 @@ def fetch_quote(start_lat, start_lng, end_lat, end_lng) -> dict | None:
     return data
 
 
+def get_quote(searcher_key, start_lat, start_lng, end_lat, end_lng) -> dict | None:
+    """Telefonga bitta qidiruv uchun BIR MARTA murojaat qiladi.
+
+    Mobil ilova har 15 soniyada /taxi/estimate/ ni qayta yuboradi. Shu
+    foydalanuvchi + shu marshrut uchun olingan real narx YANDEX_LIVE_REUSE_SECONDS
+    davomida qayta ishlatiladi — telefon har 15 soniyada band qilinmaydi.
+    Muvaffaqiyatsiz urinish ham YANDEX_LIVE_FAIL_SECONDS ga eslab qolinadi
+    (aks holda har yangilanishda telefon 30 s kutib qolardi).
+    """
+    if not is_enabled():
+        return None
+    route = ",".join(f"{x:.4f}" for x in (start_lat, start_lng, end_lat, end_lng))
+    key = "ylive:" + hashlib.sha1(f"{searcher_key or ''}|{route}".encode()).hexdigest()
+    hit = cache.get(key)
+    if hit == "fail":
+        return None
+    if hit:
+        return {**hit, "cached": True}  # ML arxiviga qayta yozilmaydi
+    quote = fetch_quote(start_lat, start_lng, end_lat, end_lng)
+    if quote:
+        cache.set(key, quote, settings.YANDEX_LIVE_REUSE_SECONDS)
+    else:
+        cache.set(key, "fail", settings.YANDEX_LIVE_FAIL_SECONDS)
+    return quote
+
+
 def prices_by_tier(quote: dict) -> dict[str, int]:
     """{"econom": 22000, "comfort": 25000, ...} — tanilmagan tariflar tashlab ketiladi."""
     out = {}
     for t in quote.get("tariffs") or []:
-        tier = TIER_BY_TARIFF.get(str(t.get("tariff", "")).strip().lower())
+        tier = (TIER_BY_CODE.get(t.get("code") or "")
+                or TIER_BY_TARIFF.get(str(t.get("tariff", "")).strip().lower()))
         price = t.get("price")
         if tier and isinstance(price, int) and price > 0 and tier not in out:
             out[tier] = price
