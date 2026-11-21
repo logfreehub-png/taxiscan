@@ -1,0 +1,24 @@
+# TaxiScan Telegram bot (polling) — systemd service shabloni.
+# Qo'lda tahrirlash shart emas: deploy/install_bot_service.sh
+# __BACKEND_DIR__, __PYTHON__ va __USER__ ni avtomatik to'ldiradi.
+#
+# .env fayli (TELEGRAM_BOT_TOKEN va boshqalar) backend/.env dan
+# taxinarx/settings.py orqali o'zi yuklanadi — EnvironmentFile kerak emas.
+
+[Unit]
+Description=TaxiScan Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__BACKEND_DIR__
+Environment=PYTHONUNBUFFERED=1
+Environment=DJANGO_SETTINGS_MODULE=taxinarx.settings
+ExecStart=__PYTHON__ manage.py run_telegram_bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

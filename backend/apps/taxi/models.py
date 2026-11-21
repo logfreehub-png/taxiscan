@@ -138,6 +138,8 @@ class PriceEstimate(models.Model):
             ("formula", "Tarif formulasi"),
             ("api", "Real API"),
             ("scraped", "Scraping"),
+            ("live", "Telefondan real narx"),
+            ("live_est", "Real narx asosida taxmin"),
         ],
         default="formula",
     )
@@ -275,3 +277,53 @@ class SearchHistory(models.Model):
 
     def __str__(self):
         return f"{self.user_id} {self.kind} {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class LiveYandexQuote(models.Model):
+    """Telefondan olingan real Yandex Go narxi — FAQAT ML o'qitish uchun arxiv.
+
+    Mijozlarga hech qachon qayta ko'rsatilmaydi va cleanup_old_estimates
+    bu jadvalni tozalamaydi. Har bir yozuv = telefonda bitta haqiqiy o'lchov.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+",
+    )
+    searcher_key = models.CharField(max_length=64, blank=True, db_index=True)
+    search_id = models.UUIDField(null=True, blank=True, db_index=True)
+
+    start_lat = models.FloatField()
+    start_lng = models.FloatField()
+    end_lat = models.FloatField()
+    end_lng = models.FloatField()
+    region = models.ForeignKey(Region, on_delete=models.SET_NULL, null=True, blank=True)
+
+    # Yandex ilovasi ekranidan
+    from_address = models.CharField(max_length=255, blank=True)
+    to_address = models.CharField(max_length=255, blank=True)
+    demand = models.CharField("Talab indeksi", max_length=64, blank=True)
+    trip_min = models.PositiveIntegerField("Yandex yo'l vaqti (daq)", null=True, blank=True)
+    arrival = models.CharField("Yetib borish soati", max_length=8, blank=True)
+    tariffs = models.JSONField(
+        default=list,
+        help_text='[{"tariff": "Start", "price": 22000, "pickup_min": 3}, ...]',
+    )
+    probe_seconds = models.FloatField(null=True, blank=True)
+    probed_at = models.DateTimeField(null=True, blank=True)
+
+    # Shu payt bizning hisob-kitob (model kalibrlash uchun)
+    osrm_distance_km = models.FloatField(null=True, blank=True)
+    osrm_duration_min = models.FloatField(null=True, blank=True)
+    formula_prices = models.JSONField(default=dict, blank=True, help_text='{"econom": 21000, ...}')
+    weather = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "Yandex real narx (ML)"
+        verbose_name_plural = "Yandex real narxlar (ML)"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.created_at:%Y-%m-%d %H:%M} {self.from_address} → {self.to_address}"

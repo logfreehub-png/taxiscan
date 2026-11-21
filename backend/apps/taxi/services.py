@@ -4,8 +4,10 @@ import uuid
 from datetime import timedelta
 from django.utils import timezone
 from concurrent.futures import ThreadPoolExecutor
-from .models import TaxiService, PriceEstimate, Region
+import logging
+from .models import TaxiService, PriceEstimate, Region, LiveYandexQuote
 from .providers import get_provider
+from . import live_yandex
 from .providers.formula import (
     haversine_km, calculate_price, current_surge, _base_hour_surge,
     tashkent_now, region_level,
@@ -14,6 +16,7 @@ from .routing import get_route, get_routes
 from .weather import weather_surge
 
 _last_cleanup_timestamp = 0.0
+logger = logging.getLogger(__name__)
 
 
 def cleanup_old_estimates(retention_days: int = 1) -> int:
@@ -121,6 +124,7 @@ def aggregate_estimates(
     save: bool = True,
     stops=None,
     searcher_key: str | None = None,
+    live: bool = True,
 ):
     """
     Barcha faol taxi xizmatlaridan parallel ravishda narxlarni so'raydi
@@ -157,6 +161,16 @@ def aggregate_estimates(
                 "unavailable_services": unavailable_services,
                 "start": {"lat": start_lat, "lng": start_lng},
                 "end": {"lat": end_lat, "lng": end_lng}}
+
+    # Yandex real narxi telefondan (~10 s) — OSRM bilan parallel boshlanadi.
+    # Oraliq to'xtashli marshrutda ishlatilmaydi: Yandex havolasi faqat A→B ni oladi.
+    live_pool = live_future = None
+    if (live and not stops and live_yandex.is_enabled()
+            and any(live_yandex.is_yandex_service(s) for s in services)):
+        live_pool = ThreadPoolExecutor(max_workers=1)
+        live_future = live_pool.submit(
+            live_yandex.fetch_quote, start_lat, start_lng, end_lat, end_lng
+        )
 
     # Oraliq to'xtashlar (A→...→B) — berilgan bo'lsa bitta yo'l, aks holda alternativlar
     waypoints = [(s["lat"], s["lng"]) for s in (stops or [])]
@@ -206,6 +220,16 @@ def aggregate_estimates(
     # demand statistikasi esa yozuvlarni emas, unikal qidiruvlarni sanaydi
     search_id = uuid.uuid4() if save else None
 
+    live_quote = None
+    if live_future is not None:
+        try:
+            live_quote = live_future.result()
+        except Exception as exc:  # fetch_quote o'zi ushlaydi, bu — zaxira
+            logger.warning("Yandex live: %s", exc)
+        live_pool.shutdown(wait=False)
+    live_prices = live_yandex.prices_by_tier(live_quote) if live_quote else {}
+    yandex_formula_prices = {}  # ML uchun: shu paytdagi bizning hisob
+
     def _fetch(service):
         provider = get_provider(service)
         try:
@@ -221,68 +245,77 @@ def aggregate_estimates(
             )
         return service, result
 
-    results = []
     with ThreadPoolExecutor(max_workers=min(8, len(services))) as ex:
-        for service, result in ex.map(_fetch, services):
-            if not result.is_ok:
-                continue
+        fetched = [(s, r) for s, r in ex.map(_fetch, services) if r.is_ok]
 
-            # Chaqirilgan joy darajasi (region_level) — barcha brendga teng.
-            # Per-brend random farq (region_factor) esa ATAY qo'llanmaydi —
-            # u brend tartibini soxta aralashtirardi.
-            result.price_uzs = _apply_region(result.price_uzs, service.minimum_fare_uzs)
+    # Chaqirilgan joy darajasi (region_level) — barcha brendga teng.
+    # Per-brend random farq (region_factor) esa ATAY qo'llanmaydi —
+    # u brend tartibini soxta aralashtirardi.
+    for service, result in fetched:
+        result.price_uzs = _apply_region(result.price_uzs, service.minimum_fare_uzs)
+        if live_yandex.is_yandex_service(service):
+            yandex_formula_prices[service.tier] = result.price_uzs
 
-            if save:
-                PriceEstimate.objects.create(
-                    user=user if (user and user.is_authenticated) else None,
-                    search_id=search_id,
-                    searcher_key=searcher_key or None,
-                    service=service,
-                    start_lat=start_lat,
-                    start_lng=start_lng,
-                    end_lat=end_lat,
-                    end_lng=end_lng,
-                    distance_km=result.distance_km,
-                    duration_min=result.duration_min,
-                    price_uzs=result.price_uzs,
-                    surge=result.surge,
-                    region=region,
-                    source=result.source,
-                )
+    # Telefondan real Yandex narxi bo'lsa — formulani almashtiradi. Ekranda
+    # bo'lmagan tariflar (masalan Business) real/formula nisbatiga moslanadi.
+    yandex_final = live_yandex.final_tier_prices(live_prices, yandex_formula_prices)
+    for service, result in fetched:
+        if live_yandex.is_yandex_service(service) and service.tier in yandex_final:
+            result.price_uzs, result.source = yandex_final[service.tier]
 
-            results.append({
-                "service": {
-                    "id": service.id,
-                    "code": service.code,
-                    "name": service.name,
-                    "brand": service.brand,
-                    "tier": service.tier,
-                    "color": service.color,
-                    "logo": service.logo.url if service.logo else None,
-                    "deeplink_template": service.deeplink_template,
-                    "website": service.website,
-                    "base_fare_uzs": service.base_fare_uzs,
-                    "per_km_uzs": service.per_km_uzs,
-                    "per_minute_uzs": service.per_minute_uzs,
-                    "minimum_fare_uzs": service.minimum_fare_uzs,
-                },
-                "price_uzs": result.price_uzs,
-                "distance_km": result.distance_km,
-                "duration_min": result.duration_min,
-                "surge": result.surge,
-                "source": result.source,
-                # Narxni qanday hisoblanganini ko'rsatish uchun breakdown
-                "breakdown": {
-                    "base": service.base_fare_uzs,
-                    "distance_part": int(result.distance_km * service.per_km_uzs),
-                    "time_part": int(result.duration_min * service.per_minute_uzs),
-                    "surge_extra": result.price_uzs - int(
-                        service.base_fare_uzs
-                        + result.distance_km * service.per_km_uzs
-                        + result.duration_min * service.per_minute_uzs
-                    ),
-                },
-            })
+    results = []
+    for service, result in fetched:
+        if save:
+            PriceEstimate.objects.create(
+                user=user if (user and user.is_authenticated) else None,
+                search_id=search_id,
+                searcher_key=searcher_key or None,
+                service=service,
+                start_lat=start_lat,
+                start_lng=start_lng,
+                end_lat=end_lat,
+                end_lng=end_lng,
+                distance_km=result.distance_km,
+                duration_min=result.duration_min,
+                price_uzs=result.price_uzs,
+                surge=result.surge,
+                region=region,
+                source=result.source,
+            )
+
+        results.append({
+            "service": {
+                "id": service.id,
+                "code": service.code,
+                "name": service.name,
+                "brand": service.brand,
+                "tier": service.tier,
+                "color": service.color,
+                "logo": service.logo.url if service.logo else None,
+                "deeplink_template": service.deeplink_template,
+                "website": service.website,
+                "base_fare_uzs": service.base_fare_uzs,
+                "per_km_uzs": service.per_km_uzs,
+                "per_minute_uzs": service.per_minute_uzs,
+                "minimum_fare_uzs": service.minimum_fare_uzs,
+            },
+            "price_uzs": result.price_uzs,
+            "distance_km": result.distance_km,
+            "duration_min": result.duration_min,
+            "surge": result.surge,
+            "source": result.source,
+            # Narxni qanday hisoblanganini ko'rsatish uchun breakdown
+            "breakdown": {
+                "base": service.base_fare_uzs,
+                "distance_part": int(result.distance_km * service.per_km_uzs),
+                "time_part": int(result.duration_min * service.per_minute_uzs),
+                "surge_extra": result.price_uzs - int(
+                    service.base_fare_uzs
+                    + result.distance_km * service.per_km_uzs
+                    + result.duration_min * service.per_minute_uzs
+                ),
+            },
+        })
 
     results.sort(key=lambda r: r["price_uzs"])
     if results:
@@ -300,6 +333,10 @@ def aggregate_estimates(
                 service, r_route["distance_km"], r_route["duration_min"]
             )
             price = _apply_region(price, service.minimum_fare_uzs)
+            # Real narx faqat asosiy (Yandex o'zi tanlagan) yo'lga tegishli
+            if (idx == 0 and live_yandex.is_yandex_service(service)
+                    and service.tier in yandex_final):
+                price = yandex_final[service.tier][0]
             per_service.append({
                 "service_id": service.id,
                 "service_code": service.code,
@@ -324,6 +361,14 @@ def aggregate_estimates(
             "cheapest_price_uzs": cheapest,
             "prices": per_service,
         })
+
+    # Har bir YANGI telefon o'lchovi ML arxiviga yoziladi (keshdan kelgani emas)
+    if live_quote and not live_quote.get("cached"):
+        _save_live_quote(
+            live_quote, user, searcher_key, search_id, region,
+            start_lat, start_lng, end_lat, end_lng,
+            primary_route, yandex_formula_prices, wx_boost, wx_reason,
+        )
 
     # Eng arzon yo'lni belgilash (har xil yo'llar narxi farq qilishi mumkin)
     if routes_with_prices:
@@ -354,6 +399,11 @@ def aggregate_estimates(
         # Yo'nalish xizmat hududidan tashqarida bo'lgani uchun chiqmagan brendlar
         "unavailable_services": unavailable_services,
         "current_surge": current_surge(),
+        # Yandex narxi telefondan olingan bo'lsa — shu daqiqadagi o'lchov haqida
+        "yandex_live": {
+            "probed_at": live_quote.get("probed_at"),
+            "demand": live_quote.get("demand"),
+        } if live_prices else None,
         # Narx nega shunday — talab sababi (pik / ob-havo) va ob-havo holati
         # MUHIM: Toshkent soati bo'yicha (server UTC bo'lsa 5 soat farq qilardi)
         "surge_reason": _surge_reason(
@@ -367,10 +417,41 @@ def aggregate_estimates(
     }
 
 
+def _save_live_quote(quote, user, searcher_key, search_id, region,
+                     start_lat, start_lng, end_lat, end_lng,
+                     route, formula_prices, wx_boost, wx_reason):
+    """Real Yandex o'lchovini ML arxiviga yozish. Xato javobni buzmasin."""
+    from django.utils.dateparse import parse_datetime
+    try:
+        LiveYandexQuote.objects.create(
+            user=user if (user and user.is_authenticated) else None,
+            searcher_key=searcher_key or "",
+            search_id=search_id,
+            start_lat=start_lat, start_lng=start_lng,
+            end_lat=end_lat, end_lng=end_lng,
+            region=region,
+            from_address=(quote.get("from") or "")[:255],
+            to_address=(quote.get("to") or "")[:255],
+            demand=(quote.get("demand") or "")[:64],
+            trip_min=quote.get("trip_min"),
+            arrival=(quote.get("arrival") or "")[:8],
+            tariffs=quote.get("tariffs") or [],
+            probe_seconds=quote.get("seconds"),
+            probed_at=parse_datetime(quote["probed_at"]) if quote.get("probed_at") else None,
+            osrm_distance_km=route.get("distance_km"),
+            osrm_duration_min=route.get("duration_min"),
+            formula_prices=formula_prices,
+            weather={"boost": wx_boost, "reason": wx_reason},
+        )
+    except Exception:
+        logger.exception("LiveYandexQuote saqlanmadi")
+
+
 def quick_local_prices(lat: float, lng: float, sample_distance_km: float = 5.0):
     """Haydovchi turgan joydan sample uzoqlikdagi joyga sample narxlar."""
     import math
     delta = sample_distance_km / 111.0
     end_lat = lat + delta * math.cos(math.radians(45))
     end_lng = lng + delta * math.sin(math.radians(45))
-    return aggregate_estimates(lat, lng, end_lat, end_lng, save=False)
+    # Sun'iy namunaviy marshrut — telefonni band qilmaymiz (live=False)
+    return aggregate_estimates(lat, lng, end_lat, end_lng, save=False, live=False)
