@@ -222,6 +222,11 @@ YANDEX_LIVE_URL = os.environ.get("YANDEX_LIVE_URL", "").rstrip("/")
 YANDEX_LIVE_KEY = os.environ.get("YANDEX_LIVE_KEY", "")
 # Telefon navbati + probe (~11 s) uchun umumiy kutish; oshsa formula ishlatiladi
 YANDEX_LIVE_TIMEOUT = float(os.environ.get("YANDEX_LIVE_TIMEOUT", "35"))
+# Bitta foydalanuvchi + marshrut uchun real narx shuncha soniya qayta ishlatiladi
+# (mobil ilova har 15 s so'raydi, telefonga esa bir marta boriladi)
+YANDEX_LIVE_REUSE_SECONDS = int(os.environ.get("YANDEX_LIVE_REUSE_SECONDS", "600"))
+# Telefon xato bersa, shu marshrutga shuncha soniya qayta urinilmaydi
+YANDEX_LIVE_FAIL_SECONDS = int(os.environ.get("YANDEX_LIVE_FAIL_SECONDS", "120"))
 
 # Payme Merchant API (kassa ma'lumotlari — business.payme.uz kabinetidan)
 PAYME_MERCHANT_ID = os.environ.get("PAYME_MERCHANT_ID", "")
