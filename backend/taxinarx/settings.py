@@ -215,6 +215,14 @@ YANDEX_GEOCODER_KEY = os.environ.get("YANDEX_GEOCODER_KEY", "")
 # Yandex til kodi: ru_RU, en_US, tr_TR, uk_UA (uz_UZ hozircha qo'llab-quvvatlanmaydi)
 YANDEX_GEOCODER_LANG = os.environ.get("YANDEX_GEOCODER_LANG", "ru_RU")
 
+# Yandex Go real narx servisi (telefon + adb, deploy/yandex_probe/server.py).
+# URL bo'sh bo'lsa — Yandex narxi eskicha formula bilan hisoblanadi.
+#   YANDEX_LIVE_URL=http://<statik-ip>:3060
+YANDEX_LIVE_URL = os.environ.get("YANDEX_LIVE_URL", "").rstrip("/")
+YANDEX_LIVE_KEY = os.environ.get("YANDEX_LIVE_KEY", "")
+# Telefon navbati + probe (~11 s) uchun umumiy kutish; oshsa formula ishlatiladi
+YANDEX_LIVE_TIMEOUT = float(os.environ.get("YANDEX_LIVE_TIMEOUT", "35"))
+
 # Payme Merchant API (kassa ma'lumotlari — business.payme.uz kabinetidan)
 PAYME_MERCHANT_ID = os.environ.get("PAYME_MERCHANT_ID", "")
 PAYME_KEY = os.environ.get("PAYME_KEY", "")

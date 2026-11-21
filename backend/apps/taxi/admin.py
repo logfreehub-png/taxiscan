@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from .models import TaxiService, Region, PriceEstimate, FavoriteRoute, SiteSetting
+from .models import TaxiService, Region, PriceEstimate, FavoriteRoute, SiteSetting, LiveYandexQuote
 
 
 @admin.register(TaxiService)
@@ -58,4 +58,20 @@ class SiteSettingAdmin(admin.ModelAdmin):
         return not SiteSetting.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(LiveYandexQuote)
+class LiveYandexQuoteAdmin(admin.ModelAdmin):
+    """ML arxivi — faqat ko'rish uchun."""
+    list_display = ("created_at", "from_address", "to_address", "demand", "trip_min",
+                    "osrm_distance_km", "probe_seconds")
+    list_filter = ("demand", "region")
+    search_fields = ("from_address", "to_address")
+    date_hierarchy = "created_at"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False

@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+"""Yandex Go real narx servisi: HTTP so'rov -> telefon (adb + uiautomator) -> JSON.
+
+Bitta telefon bor, shuning uchun so'rovlar navbat bilan bajariladi:
+  * bir vaqtda bitta probe (phone_lock);
+  * bir xil marshrut bo'yicha parallel so'rovlar bitta probe natijasini bo'lishadi;
+  * FRESH_SECONDS ichidagi natija xotiradan qaytadi (diskdagi eski ma'lumot
+    hech qachon mijozga qaytarilmaydi).
+Har bir haqiqiy probe data/quotes-YYYY-MM.jsonl ga yoziladi (ML uchun).
+
+Ishga tushirish:
+  python3 server.py serve                      # .env dan sozlamalar
+  python3 server.py probe --end 41.3111 69.2797  # bir martalik test
+
+API:
+  POST /v1/quote   {"start_lat":..,"start_lng":..,"end_lat":..,"end_lng":..}
+  GET  /v1/health
+  Sarlavha: X-Api-Key: <PROBE_API_KEY>
+"""
+import argparse
+import hmac
+import html
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+PKG = "ru.yandex.taxi"
+UI_PATH = "/sdcard/taxiscan_ui.xml"
+
+# Masalan:
+#   content-desc="«Start» tarifi, 22000 soʻm, Yetkazish 3 daq"
+#   content-desc="«Komfort» tarifi, Talab yuqori, 25000 soʻm, Yetkazish 3 daq"
+RX_TARIFF = re.compile(r'content-desc="(?:«|&quot;)?([^"«»&]+?)(?:»|&quot;)? tarifi, ([^"]*)"')
+RX_PRICE = re.compile(r"(\d[\d\s]*?)\s*so(?:'|&apos;|&#39;|.)m")
+RX_PICKUP = re.compile(r"Yetkazish (\d+) daq")
+RX_TRIP_MIN = re.compile(r"•\s*(\d+)\s*daq")
+RX_DEMAND = re.compile(r'talab indeksi: ([^"]+)')
+RX_FROM = re.compile(r'content-desc="Manzilingiz, ([^"]*)"')
+RX_TO = re.compile(r'content-desc="Qayerga, ([^"]*)"')
+RX_ARRIVAL = re.compile(r'content-desc="(\d{1,2}:\d{2}) da yakuniy manzilga')
+
+# O'zbekiston chegarasi (taxminan) — tashqaridagi koordinatalar rad etiladi
+LAT_RANGE = (37.0, 46.0)
+LNG_RANGE = (55.0, 74.0)
+
+log = logging.getLogger("yandex_probe")
+
+
+def load_env(path: Path):
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+class ProbeError(Exception):
+    """Mijozga qaytariladigan xato. code — mashina o'qiydigan qisqa kod."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+# --------------------------------------------------------------------------- #
+# Telefon
+# --------------------------------------------------------------------------- #
+class Phone:
+    def __init__(self, serial: str | None, probe_timeout: float):
+        self.serial = serial or None
+        self.probe_timeout = probe_timeout
+
+    def adb(self, args, timeout=20) -> subprocess.CompletedProcess:
+        cmd = ["adb"] + (["-s", self.serial] if self.serial else []) + args
+        try:
+            return subprocess.run(cmd, capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise ProbeError("adb_timeout", f"adb javob bermadi: {' '.join(args[:2])}")
+        except FileNotFoundError:
+            raise ProbeError("no_adb", "adb topilmadi")
+
+    def shell_out(self, command: str, timeout=20) -> str:
+        r = self.adb(["exec-out", command], timeout)
+        if r.returncode != 0:
+            err = (r.stderr or b"").decode("utf-8", "replace").strip()
+            if "no devices" in err or "not found" in err or "offline" in err:
+                raise ProbeError("no_device", f"telefon ulanmagan: {err}")
+            raise ProbeError("adb_error", err or f"adb xato kodi {r.returncode}")
+        return r.stdout.decode("utf-8", "replace")
+
+    def state(self) -> dict:
+        r = self.adb(["get-state"], 10)
+        device = r.stdout.decode().strip() or r.stderr.decode().strip()
+        if device != "device":
+            return {"device": device or "none", "awake": False, "locked": None}
+        power = self.shell_out("dumpsys power | grep -m1 mWakefulness=")
+        window = self.shell_out("dumpsys window | grep -m1 isKeyguardShowing")
+        return {
+            "device": "device",
+            "awake": "Awake" in power,
+            "locked": "isKeyguardShowing=true" in window,
+        }
+
+    def ensure_ready(self):
+        st = self.state()
+        if st["device"] != "device":
+            raise ProbeError("no_device", f"telefon holati: {st['device']}")
+        if not st["awake"]:
+            # Xiaomi'da "USB debugging (Security settings)" yoqilmasa bu ishlamaydi
+            self.adb(["shell", "input", "keyevent", "KEYCODE_WAKEUP"], 10)
+            time.sleep(0.5)
+            st = self.state()
+            if not st["awake"]:
+                raise ProbeError("screen_off", "telefon ekrani o'chiq va yoqib bo'lmadi")
+        if st["locked"]:
+            raise ProbeError("phone_locked", "telefon qulflangan (lock screen)")
+
+    def dump_xml(self) -> str:
+        # Eski faylni o'chirib, yangisini olamiz — aks holda dump xato bo'lsa
+        # oldingi marshrut narxlari qaytib qolardi.
+        return self.shell_out(
+            f"rm -f {UI_PATH}; uiautomator dump {UI_PATH} >/dev/null 2>&1; cat {UI_PATH} 2>/dev/null",
+            timeout=15,
+        )
+
+    @staticmethod
+    def parse(xml: str) -> dict | None:
+        tariffs = []
+        seen = set()
+        for m in RX_TARIFF.finditer(xml):
+            name = html.unescape(m.group(1)).strip()
+            rest = html.unescape(m.group(2))
+            pm = RX_PRICE.search(rest)
+            price = int(re.sub(r"\D", "", pm.group(1)) or 0) if pm else 0
+            if not name or price <= 0 or name in seen:
+                continue  # narxi hali chiqmagan (masalan «Birga»)
+            seen.add(name)
+            pickup = RX_PICKUP.search(rest)
+            # Narx va yetkazishdan boshqa bo'laklar — masalan "Talab yuqori"
+            notes = [
+                p.strip() for p in rest.split(",")
+                if p.strip() and not RX_PRICE.search(p) and not RX_PICKUP.search(p)
+                and not re.fullmatch(r"[\d\s]+", p.strip())
+            ]
+            tariffs.append({
+                "tariff": name,
+                "price": price,
+                "pickup_min": int(pickup.group(1)) if pickup else None,
+                "notes": notes,
+            })
+        if not tariffs:
+            return None
+
+        def g(rx):
+            m = rx.search(xml)
+            return html.unescape(m.group(1)).strip() if m else ""
+
+        to_raw = g(RX_TO)
+        trip = RX_TRIP_MIN.search(to_raw)
+        return {
+            "from": g(RX_FROM).strip(" ,"),
+            "to": to_raw.split("•")[0].strip(" ,"),
+            "trip_min": int(trip.group(1)) if trip else None,
+            "arrival": g(RX_ARRIVAL) or None,
+            "demand": g(RX_DEMAND),
+            "tariffs": tariffs,
+        }
+
+    def quote(self, s_lat, s_lng, e_lat, e_lng) -> dict:
+        t0 = time.monotonic()
+        self.ensure_ready()
+        # Har safar ilovani yopib ochamiz: ekranda oldingi marshrut qolib,
+        # eski narx o'qilib ketmasligi uchun.
+        self.adb(["shell", "am", "force-stop", PKG], 15)
+        url = (
+            f"yandextaxi://route?start-lat={s_lat:.6f}&start-lon={s_lng:.6f}"
+            f"&end-lat={e_lat:.6f}&end-lon={e_lng:.6f}"
+        )
+        r = self.adb(["shell", f"am start -a android.intent.action.VIEW -p {PKG} -d '{url}'"], 15)
+        out = (r.stdout + r.stderr).decode("utf-8", "replace")
+        if "Error" in out:
+            raise ProbeError("launch_failed", out.strip()[:300])
+
+        # Tariflar birin-ketin yuklanadi: ketma-ket ikki o'qish bir xil
+        # chiqmaguncha (yoki vaqt tugaguncha) qabul qilmaymiz.
+        prev = None
+        while time.monotonic() - t0 < self.probe_timeout:
+            parsed = self.parse(self.dump_xml())
+            if parsed:
+                if prev and parsed["tariffs"] == prev["tariffs"]:
+                    parsed["seconds"] = round(time.monotonic() - t0, 1)
+                    return parsed
+                prev = parsed
+            else:
+                time.sleep(0.4)
+        if prev:  # barqarorlashmadi, lekin narx bor — oxirgisini qaytaramiz
+            prev["seconds"] = round(time.monotonic() - t0, 1)
+            prev["unstable"] = True
+            return prev
+        raise ProbeError("timeout", f"{self.probe_timeout:.0f} soniyada narx chiqmadi")
+
+
+# --------------------------------------------------------------------------- #
+# Navbat, kesh, saqlash
+# --------------------------------------------------------------------------- #
+class QuoteService:
+    def __init__(self, phone: Phone, data_dir: Path, fresh_seconds: float, max_wait: float):
+        self.phone = phone
+        self.data_dir = data_dir
+        self.fresh_seconds = fresh_seconds
+        self.max_wait = max_wait
+        self.phone_lock = threading.Lock()
+        self.mu = threading.Lock()
+        self.cache: dict[tuple, dict] = {}
+        self.inflight: dict[tuple, threading.Event] = {}
+        self.write_lock = threading.Lock()
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def key(s_lat, s_lng, e_lat, e_lng):
+        # ~10 m aniqlik: shu oraliqdagi so'rovlar bitta marshrut hisoblanadi
+        return tuple(round(x, 4) for x in (s_lat, s_lng, e_lat, e_lng))
+
+    def _fresh(self, key):
+        hit = self.cache.get(key)
+        if hit and time.monotonic() - hit["_t"] < self.fresh_seconds:
+            return hit
+        return None
+
+    def get(self, s_lat, s_lng, e_lat, e_lng) -> dict:
+        key = self.key(s_lat, s_lng, e_lat, e_lng)
+        with self.mu:
+            # eskirgan kesh yozuvlarini tozalash
+            now = time.monotonic()
+            for k in [k for k, v in self.cache.items() if now - v["_t"] >= self.fresh_seconds]:
+                del self.cache[k]
+            hit = self._fresh(key)
+            if hit:
+                return self._public(hit, cached=True)
+            ev = self.inflight.get(key)
+            owner = ev is None
+            if owner:
+                ev = self.inflight[key] = threading.Event()
+
+        if not owner:
+            # Xuddi shu marshrut hozir o'lchanmoqda — natijasini kutamiz
+            ev.wait(self.max_wait + self.phone.probe_timeout)
+            with self.mu:
+                hit = self._fresh(key)
+            if hit:
+                return self._public(hit, cached=True)
+            raise ProbeError("busy", "parallel probe muvaffaqiyatsiz tugadi")
+
+        try:
+            if not self.phone_lock.acquire(timeout=self.max_wait):
+                raise ProbeError("busy", "telefon band, navbat juda uzun")
+            try:
+                res = self.phone.quote(s_lat, s_lng, e_lat, e_lng)
+            finally:
+                self.phone_lock.release()
+            res["probed_at"] = datetime.now(timezone.utc).isoformat()
+            res["_t"] = time.monotonic()
+            with self.mu:
+                self.cache[key] = res
+            self._save(True, (s_lat, s_lng, e_lat, e_lng), res)
+            return self._public(res, cached=False)
+        except ProbeError as e:
+            self._save(False, (s_lat, s_lng, e_lat, e_lng), {"error": e.code, "message": e.message})
+            raise
+        finally:
+            with self.mu:
+                self.inflight.pop(key, None)
+            ev.set()
+
+    @staticmethod
+    def _public(res: dict, cached: bool) -> dict:
+        out = {k: v for k, v in res.items() if not k.startswith("_")}
+        out["ok"] = True
+        out["cached"] = cached
+        return out
+
+    def _save(self, ok: bool, coords, payload: dict):
+        rec = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "ok": ok,
+            "start": [coords[0], coords[1]],
+            "end": [coords[2], coords[3]],
+            **{k: v for k, v in payload.items() if not k.startswith("_")},
+        }
+        path = self.data_dir / f"quotes-{datetime.now(timezone.utc):%Y-%m}.jsonl"
+        try:
+            with self.write_lock, path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError as e:
+            log.error("saqlab bo'lmadi: %s", e)
+
+
+# --------------------------------------------------------------------------- #
+# HTTP
+# --------------------------------------------------------------------------- #
+ERROR_STATUS = {"busy": 503, "phone_locked": 503, "screen_off": 503, "no_device": 503,
+                "timeout": 504, "adb_timeout": 504}
+
+
+def make_handler(service: QuoteService, api_key: str):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "yandex-probe/1.0"
+        sys_version = ""
+
+        def log_message(self, fmt, *args):
+            log.info("%s %s", self.client_address[0], fmt % args)
+
+        def _send(self, status: int, body: dict):
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _authorized(self) -> bool:
+            got = self.headers.get("X-Api-Key", "")
+            if not hmac.compare_digest(got.encode(), api_key.encode()):
+                self._send(401, {"ok": False, "error": "unauthorized"})
+                return False
+            return True
+
+        def do_GET(self):
+            if self.path != "/v1/health":
+                return self._send(404, {"ok": False, "error": "not_found"})
+            if not self._authorized():
+                return
+            try:
+                st = service.phone.state()
+            except ProbeError as e:
+                return self._send(503, {"ok": False, "error": e.code, "message": e.message})
+            ready = st["device"] == "device" and st["awake"] and not st["locked"]
+            self._send(200, {"ok": ready, **st, "busy": service.phone_lock.locked()})
+
+        def do_POST(self):
+            if self.path != "/v1/quote":
+                return self._send(404, {"ok": False, "error": "not_found"})
+            if not self._authorized():
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 4096:
+                    raise ValueError("body")
+                body = json.loads(self.rfile.read(length))
+                coords = [float(body[k]) for k in ("start_lat", "start_lng", "end_lat", "end_lng")]
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                return self._send(400, {"ok": False, "error": "bad_request",
+                                        "message": "start_lat, start_lng, end_lat, end_lng kerak"})
+            s_lat, s_lng, e_lat, e_lng = coords
+            for lat, lng in ((s_lat, s_lng), (e_lat, e_lng)):
+                if not (LAT_RANGE[0] <= lat <= LAT_RANGE[1] and LNG_RANGE[0] <= lng <= LNG_RANGE[1]):
+                    return self._send(400, {"ok": False, "error": "out_of_range"})
+            try:
+                res = service.get(s_lat, s_lng, e_lat, e_lng)
+            except ProbeError as e:
+                log.warning("probe xato: %s %s", e.code, e.message)
+                return self._send(ERROR_STATUS.get(e.code, 502),
+                                  {"ok": False, "error": e.code, "message": e.message})
+            except Exception as e:  # kutilmagan xato — servis yiqilmasin
+                log.exception("kutilmagan xato")
+                return self._send(500, {"ok": False, "error": "internal", "message": str(e)})
+            self._send(200, res)
+
+    return Handler
+
+
+def main():
+    load_env(BASE_DIR / ".env")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("serve")
+    pr = sub.add_parser("probe", help="bir martalik test")
+    pr.add_argument("--start", nargs=2, type=float, default=[41.2755, 69.2030])
+    pr.add_argument("--end", nargs=2, type=float, default=[41.3111, 69.2797])
+    a = p.parse_args()
+
+    phone = Phone(os.environ.get("ADB_SERIAL"), float(os.environ.get("PROBE_TIMEOUT", "30")))
+
+    if a.cmd == "probe":
+        try:
+            print(json.dumps(phone.quote(*a.start, *a.end), ensure_ascii=False, indent=2))
+        except ProbeError as e:
+            print(f"{e.code}: {e.message}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    api_key = os.environ.get("PROBE_API_KEY", "")
+    if len(api_key) < 16:
+        sys.exit("PROBE_API_KEY (kamida 16 belgi) .env da berilmagan")
+    service = QuoteService(
+        phone,
+        Path(os.environ.get("DATA_DIR", BASE_DIR / "data")),
+        fresh_seconds=float(os.environ.get("FRESH_SECONDS", "20")),
+        max_wait=float(os.environ.get("MAX_WAIT", "45")),
+    )
+    host = os.environ.get("PROBE_HOST", "0.0.0.0")
+    port = int(os.environ.get("PROBE_PORT", "3060"))
+    httpd = ThreadingHTTPServer((host, port), make_handler(service, api_key))
+    httpd.daemon_threads = True
+    log.info("yandex-probe %s:%s da ishlayapti", host, port)
+    httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
