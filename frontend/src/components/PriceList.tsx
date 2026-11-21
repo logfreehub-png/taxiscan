@@ -196,7 +196,23 @@ export function PriceList({
                   <Sparkles size={10} /> {highlightMode === "expensive" ? "Eng ko'p to'laydi" : "Eng arzon"}
                 </span>
               )}
-              {r.surge > 1.05 && (
+              {r.source === "live" && (
+                <span
+                  className="badge bg-green-100 text-green-700"
+                  title="Narx hozirgina Yandex Go ilovasidan olindi"
+                >
+                  ● Real narx
+                </span>
+              )}
+              {r.source === "live_est" && (
+                <span
+                  className="badge bg-green-50 text-green-700"
+                  title="Yandex Go'ning hozirgi real narxlari asosida hisoblangan"
+                >
+                  Real narxga moslangan
+                </span>
+              )}
+              {r.surge > 1.05 && !r.source.startsWith("live") && (
                 <span className="badge bg-orange-100 text-orange-700">
                   Surge x{formatNum(r.surge, 1)}
                 </span>
