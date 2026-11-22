@@ -518,9 +518,14 @@ def _save_live_quote(provider, quote, user, searcher_key, search_id, region,
     from django.utils.dateparse import parse_datetime
     probed_at = parse_datetime(quote["probed_at"]) if quote.get("probed_at") else None
     try:
-        if probed_at and LiveYandexQuote.objects.filter(
-                provider=provider, probed_at=probed_at).exists():
-            return
+        if probed_at:
+            # Parallel so'rovlar (hisoblash + 15 s taymer) bir o'lchovni bir vaqtda
+            # yozib yubormasin: cache.add atomar — faqat birinchisi o'tadi
+            from django.core.cache import cache
+            if not cache.add(f"ylive-saved:{provider}:{quote['probed_at']}", 1, 86400):
+                return
+            if LiveYandexQuote.objects.filter(provider=provider, probed_at=probed_at).exists():
+                return
         LiveYandexQuote.objects.create(
             provider=provider,
             user=user if (user and user.is_authenticated) else None,

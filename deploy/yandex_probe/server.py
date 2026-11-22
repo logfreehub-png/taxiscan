@@ -127,6 +127,7 @@ class Phone:
     def __init__(self, serial: str | None, probe_timeout: float):
         self.serial = serial or None
         self.probe_timeout = probe_timeout
+        self.wb_last = None  # oldingi WB natijasi — ekranda qolgan eski narxni tanish uchun
 
     def adb(self, args, timeout=20) -> subprocess.CompletedProcess:
         cmd = ["adb"] + (["-s", self.serial] if self.serial else []) + args
@@ -171,7 +172,11 @@ class Phone:
             if not st["awake"]:
                 raise ProbeError("screen_off", "telefon ekrani o'chiq va yoqib bo'lmadi")
         if st["locked"]:
-            raise ProbeError("phone_locked", "telefon qulflangan (lock screen)")
+            # Telefonda PIN yo'q — qulf ekranini olib tashlash yetarli
+            self.adb(["shell", "wm", "dismiss-keyguard"], 10)
+            time.sleep(1)
+            if self.state()["locked"]:
+                raise ProbeError("phone_locked", "telefon qulflangan (lock screen)")
 
     def dump_xml(self) -> str:
         # Eski faylni o'chirib, yangisini olamiz — aks holda dump xato bo'lsa
@@ -337,7 +342,10 @@ class Phone:
         """
         t0 = time.monotonic()
         self.ensure_ready()
-        if WB_PKG not in self.focus():
+        # Ilova jarayoni tirik bo'lsa (fonda ham) deeplink "warm" ishlanadi va
+        # `from` to'g'ri olinadi. O'lik bo'lsa — avval ochib, bosh ekranni kutamiz.
+        alive = self.adb(["shell", "pidof", WB_PKG], 10).stdout.strip()
+        if not alive:
             self.adb(["shell", "monkey", "-p", WB_PKG, "-c",
                       "android.intent.category.LAUNCHER", "1"], 15)
             while time.monotonic() - t0 < 15:
@@ -345,30 +353,32 @@ class Phone:
                 if WB_PKG in self.focus() and len(self.wb_nodes()) >= 4:
                     break
             time.sleep(1)  # GPS bo'yicha pickup o'rnatilib bo'lsin
-        # Oldingi marshrut tariflari ekranda qolgan bo'lsa — bosh ekranga qaytamiz,
-        # aks holda eski narx yangisi deb o'qilib ketardi
-        for _ in range(3):
-            if not self.wb_parse(self.wb_nodes()):
-                break
-            self.adb(["shell", "input", "keyevent", "KEYCODE_BACK"], 10)
-            time.sleep(1)
+        # ESKI: deeplinkdan oldin BACK bosib bosh ekranga qaytilardi (har biri
+        # ~2.7 s dump) — endi eski ekran wb_last bilan taqqoslab tashlab ketiladi.
         url = f"wb-taxi://ride?from={s_lat:.6f},{s_lng:.6f}&to={e_lat:.6f},{e_lng:.6f}"
         r = self.adb(["shell", f"am start -a android.intent.action.VIEW -p {WB_PKG} -d '{url}'"], 15)
         out = (r.stdout + r.stderr).decode("utf-8", "replace")
         if "Error" in out:
             raise ProbeError("launch_failed", out.strip()[:300])
 
+        t_link = time.monotonic()
         prev = None
         while time.monotonic() - t0 < self.probe_timeout:
             parsed = self.wb_parse(self.wb_nodes())
-            if parsed and parsed["from"] and parsed["to"]:
+            # Oldingi probe ekrani o'zgarmagan bo'lsa — bu eski narx (deeplink
+            # hali ishlanmagan). Bir xil marshrut qayta so'ralgan bo'lishi ham
+            # mumkin, shuning uchun 8 s dan keyin qabul qilamiz.
+            stale = parsed == self.wb_last and time.monotonic() - t_link < 8
+            if parsed and parsed["from"] and parsed["to"] and not stale:
                 if prev and parsed == prev:
+                    self.wb_last = dict(parsed)
                     parsed["seconds"] = round(time.monotonic() - t0, 1)
                     return parsed
                 prev = parsed
             else:
                 time.sleep(0.4)
         if prev:
+            self.wb_last = dict(prev)
             prev["seconds"] = round(time.monotonic() - t0, 1)
             prev["unstable"] = True
             return prev
