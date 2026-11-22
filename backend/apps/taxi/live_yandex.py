@@ -29,11 +29,22 @@ TIER_BY_TARIFF = {
 
 YANDEX_CODE_PREFIX = "yandex_go__"
 
-# WB Taxi ekranidagi tariflar: Standard / Comfort / Comfort + (Business yo'q)
+# WB Taxi ekranidagi tariflar: Standard / Comfort / Comfort + / Electro.
+# WB'da Business yo'q — eng yuqori klass Electro TaxiScan'dagi Business o'rnida.
 WB_TIER_BY_CODE = {
     "standard": "econom",
     "comfort": "comfort",
     "comfort_plus": "comfort_plus",
+    "electro": "business",
+    "business": "business",
+}
+
+# Uklon ekranidagi tariflar: Layt -> Start, Standart -> Comfort,
+# Komfort -> Comfort+, Biznes -> Business
+UKLON_TIER_BY_CODE = {
+    "layt": "econom",
+    "standart": "comfort",
+    "komfort": "comfort_plus",
     "business": "business",
 }
 
@@ -41,6 +52,7 @@ WB_TIER_BY_CODE = {
 PROVIDERS = {
     "yandex": {"prefix": YANDEX_CODE_PREFIX, "tiers": TIER_BY_CODE, "names": TIER_BY_TARIFF},
     "wb": {"prefix": "wb_taxi__", "tiers": WB_TIER_BY_CODE, "names": {}},
+    "uklon": {"prefix": "uklon__", "tiers": UKLON_TIER_BY_CODE, "names": {}},
 }
 
 
@@ -75,7 +87,8 @@ def fetch_quote(start_lat, start_lng, end_lat, end_lng, provider="yandex") -> di
             },
             headers={"X-Api-Key": settings.YANDEX_LIVE_KEY},
             # Telefon bitta: WB so'rovi Yandex tugashini navbatda kutadi
-            timeout=(5, settings.YANDEX_LIVE_HTTP_TIMEOUT),
+            timeout=(5, settings.UKLON_LIVE_HTTP_TIMEOUT if provider == "uklon"
+                     else settings.YANDEX_LIVE_HTTP_TIMEOUT),
         )
         data = resp.json()
     except (requests.RequestException, ValueError) as exc:
