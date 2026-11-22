@@ -230,10 +230,20 @@ YANDEX_LIVE_WAIT = float(os.environ.get("YANDEX_LIVE_WAIT", "55"))
 # YANDEX_LIVE_EXTRA_WAIT = float(os.environ.get("YANDEX_LIVE_EXTRA_WAIT", "5"))
 # Probe servisiga HTTP so'rov chegarasi (telefon navbati + probe, ~45 + 30 s)
 YANDEX_LIVE_HTTP_TIMEOUT = float(os.environ.get("YANDEX_LIVE_HTTP_TIMEOUT", "80"))
-# Qaysi brendlar real narxi telefondan olinadi (probe servisidagi provider nomlari)
+# Qaysi brendlar real narxi telefondan olinadi (probe servisidagi provider nomlari).
+# Uklon pickup'ni telefon GPS'idan oladi — probe test GPS beradi (har doim ham
+# ishlamaydi), shuning uchun Uklon YANDEX_LIVE_STRICT da emas.
 YANDEX_LIVE_PROVIDERS = [
-    p.strip() for p in os.environ.get("YANDEX_LIVE_PROVIDERS", "yandex,wb").split(",") if p.strip()
+    p.strip() for p in os.environ.get("YANDEX_LIVE_PROVIDERS", "yandex,wb,uklon").split(",")
+    if p.strip()
 ]
+# Shu brendlar FAQAT real narx bilan chiqadi (formula yo'q, javob ularni kutadi).
+# Qolgan live brendlar (Uklon) — real narx tayyor bo'lsa, aks holda formula.
+YANDEX_LIVE_STRICT = [
+    p.strip() for p in os.environ.get("YANDEX_LIVE_STRICT", "yandex,wb").split(",") if p.strip()
+]
+# Uklon navbatda Yandex + WB dan keyin turadi va test GPS bilan ~30-70 s oladi
+UKLON_LIVE_HTTP_TIMEOUT = float(os.environ.get("UKLON_LIVE_HTTP_TIMEOUT", "180"))
 # Bitta foydalanuvchi + marshrut uchun real narx shuncha soniya qayta ishlatiladi
 # (mobil ilova har 15 s so'raydi, telefonga esa bir marta boriladi)
 YANDEX_LIVE_REUSE_SECONDS = int(os.environ.get("YANDEX_LIVE_REUSE_SECONDS", "600"))

@@ -42,6 +42,20 @@ Firewall: `sudo ufw allow 3060/tcp`.
 Xato bo'lsa `ok:false`, `error` quyidagilardan biri bo'ladi: `busy`, `phone_locked`, `screen_off`, `no_device`, `timeout`, `unauthorized`, `bad_provider`.
 Bunday holatda backend o'sha brend narxini formula bilan hisoblaydi.
 
+## Tariflar ro'yxatini surish (scroll)
+
+Narxlar barqarorlashgach, servis tarif kartalarini surib yangi tariflarni yig'adi. Business topilsa (WB'da Electro) yoki yangi tarif chiqmasa to'xtaydi, ko'pi bilan `MAX_SWIPES`=4 marta.
+Yo'nalishni kartalar joylashuvidan o'zi aniqlaydi: Yandex va WB'da gorizontal, Uklon'da vertikal. Uklon'da avval tepaga suriladi, chunki Layt yuqorida yashiringan.
+
+## Uklon xususiyati
+
+`geo:LAT,LON` faqat borish manzilini oladi. Ilova kodida ham marshrut doim [joriy joylashuv, manzil] bo'ladi, koordinata bilan qidiruv ham ishlamaydi.
+Shuning uchun probe paytida telefonga test GPS beriladi (`cmd location providers set-test-provider-location`) va keyin olib tashlanadi.
+Google joylashuv xizmati Wi-Fi orqali haqiqiy joyni ham qo'shgani uchun bu har doim ham ishlamaydi (taxminan yarmida).
+Uklon pickup'i `UK_HOME_FROM` (telefonning haqiqiy joyidagi manzil) bo'lib chiqsa, probe `mock_failed` qaytaradi va noto'g'ri narx bermaydi.
+Boshlanish nuqtasi telefondan 300 m ichida bo'lsa, test GPS kerak emas.
+Navbatda Uklon Yandex va WB'dan keyin turadi (`PRIORITY`).
+
 ## WB Taxi xususiyati
 
 Deeplink: `wb-taxi://ride?from=LAT,LON&to=LAT,LON`. Ilova noldan (cold start) ochilsa, `from` o'rniga telefonning GPS nuqtasini qo'yib yuboradi.
@@ -76,7 +90,12 @@ YANDEX_LIVE_FAIL_SECONDS=120
 ```
 
 Tariflar `apps/taxi/live_yandex.py` dagi `PROVIDERS` orqali bog'lanadi:
-Yandex Start→econom, Komfort→comfort, Komfort+→comfort_plus; WB Standard→econom, Comfort→comfort, Comfort +→comfort_plus.
+* Yandex: Start→Start, Comfort→Comfort, Comfort+→Comfort+, Business→Business
+* WB: Standard→Start, Comfort→Comfort, Comfort +→Comfort+, Electro→Business
+* Uklon: Layt→Start, Standart→Comfort, Komfort→Comfort+, Biznes→Business
+
+`YANDEX_LIVE_STRICT` (yandex, wb) brendlari faqat real narx bilan chiqadi va javob ularni kutadi.
+Uklon "yumshoq": real narx tayyor bo'lsa ishlatiladi, bo'lmasa formula bilan chiqadi va javobni ushlab turmaydi.
 Har bir o'lchov `LiveYandexQuote` ga (`provider` = yandex | wb) bir marta yoziladi.
 
 Mobil ilovada WB tugmasi `TaxiService.deeplink_template` (migratsiya 0011) orqali WB ilovasini A→B marshrut bilan ochadi.

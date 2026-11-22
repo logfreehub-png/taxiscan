@@ -72,6 +72,7 @@ TARIFF_CODES = {
 #   ekran: "Standard" / "27 500 сўм" (nom narx tepasida), pastda pickup va manzil
 WB_PKG = "uz.wildberries.taxi.client"
 RX_BOUNDS = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
+RX_BOUNDS_ATTR = re.compile(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
 RX_WB_PRICE = re.compile(r"^\d[\d\s]*\d\s*\D{1,8}$")
 RX_WB_MIN = re.compile(r"^\d+\s*(?:min|мин|daq)\.?$", re.I)
 WB_TARIFF_CODES = {
@@ -91,7 +92,48 @@ def wb_norm(t: str) -> str:
     return re.sub(r"\s+", "", t).lower()
 
 
-PROVIDERS = ("yandex", "wb")
+def haversine_m(lat1, lng1, lat2, lng2) -> float:
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def merge_tariffs(have: list, new: list) -> int:
+    """Swipe'dan keyin chiqqan yangi tariflarni qo'shadi. Qo'shilganlar soni."""
+    names = {t["tariff"] for t in have}
+    added = [t for t in new if t["tariff"] not in names]
+    have.extend(added)
+    return len(added)
+
+
+# --- Uklon (ua.com.uklontaxi) — ~/uklon-probe/server.py asosida ---
+#   content-desc/text: "Mahsulot: Layt Narxi: 12 000 UZS Keladi: 3 ..."
+#   Deeplink faqat manzilni oladi (geo:LAT,LON; ilova kodida ham marshrut doim
+#   [joriy joylashuv, manzil]) — pickup telefon GPS'idan. Shuning uchun probe
+#   paytida telefonga test GPS joylashuvi (so'ralgan boshlanish nuqtasi) beriladi.
+UK_PKG = "ua.com.uklontaxi"
+RX_UK_PRODUCT = re.compile(r"Mahsulot:\s*(?P<n>.+?)Narxi:\s*(?P<f>dan\s+)?(?P<p>[\d\s]+)UZS")
+RX_UK_ETA = re.compile(r"Keladi:\s*(?P<e>\d+)")
+RX_UK_FROM = re.compile(r"Xizmat nuqtasi:\s*(?P<a>.+?)\s+dan so")
+RX_UK_TO = re.compile(r"Ketish nuqtasi:\s*(?P<a>.+?)\s+da kelamiz")
+UK_TARIFF_CODES = {"layt": "layt", "standart": "standart", "komfort": "komfort", "biznes": "business",
+                   "yetkazish": "delivery"}
+MOCK_PROVIDERS = ("gps", "network", "fused")
+# So'ralgan boshlanish telefondan shuncha yaqin bo'lsa test GPS kerak emas
+UK_NEAR_M = float(os.environ.get("UK_NEAR_M", "300"))
+# Ilovani ochishdan oldin test GPS'ni uzatish vaqti (2-urinishda ikki baravar)
+UK_MOCK_WARMUP = float(os.environ.get("UK_MOCK_WARMUP", "10"))
+# Telefonni uzoq band qilmaslik uchun (keyingi Yandex/WB kutib qolmasin) — 1
+UK_MOCK_ATTEMPTS = int(os.environ.get("UK_MOCK_ATTEMPTS", "1"))
+RX_LOCATION = re.compile(r"Location\[(?:gps|fused|network) (-?\d+\.\d+),(-?\d+\.\d+)(?![^\]]*mock)")
+
+# Tarif ro'yxatini surish: Business topilguncha ko'pi bilan shuncha swipe
+MAX_SWIPES = int(os.environ.get("MAX_SWIPES", "4"))
+RX_DENIED = re.compile(r"INJECT_EVENTS|SecurityException")
+
+PROVIDERS = ("yandex", "wb", "uklon")
 
 # O'zbekiston chegarasi (taxminan) — tashqaridagi koordinatalar rad etiladi
 LAT_RANGE = (37.0, 46.0)
@@ -127,7 +169,10 @@ class Phone:
     def __init__(self, serial: str | None, probe_timeout: float):
         self.serial = serial or None
         self.probe_timeout = probe_timeout
-        self.wb_last = None  # oldingi WB natijasi — ekranda qolgan eski narxni tanish uchun
+        self.wb_last = None  # oldingi WB (from, to) — ekranda qolgan eski narxni tanish uchun
+        # Uklon: GPS bo'yicha "uy" pickup manzillari (test GPS ishlamaganini tanish uchun)
+        self.uk_home = {a.strip() for a in os.environ.get("UK_HOME_FROM", "").split("|") if a.strip()}
+        self.uk_seen = {}
 
     def adb(self, args, timeout=20) -> subprocess.CompletedProcess:
         cmd = ["adb"] + (["-s", self.serial] if self.serial else []) + args
@@ -189,6 +234,7 @@ class Phone:
     @staticmethod
     def parse(xml: str) -> dict | None:
         tariffs = []
+        cards = []  # tarif kartalari markazi — ro'yxatni surish uchun
         seen = set()
         for rx in RX_TARIFFS:
             for m in rx.finditer(xml):
@@ -199,6 +245,10 @@ class Phone:
                 if not name or price <= 0 or name in seen:
                     continue  # narxi hali chiqmagan (masalan «Birga»)
                 seen.add(name)
+                b = RX_BOUNDS_ATTR.search(xml, m.end(), m.end() + 600)
+                if b:
+                    l, tp, r, bt = map(int, b.groups())
+                    cards.append(((l + r) / 2, (tp + bt) / 2))
                 pickup = RX_PICKUP.search(rest)
                 # Narx va yetkazishdan boshqa bo'laklar — masalan "Talab yuqori"
                 leftover = RX_PICKUP.sub("", RX_PRICE.sub("", rest))
@@ -231,7 +281,70 @@ class Phone:
             "arrival": arrival.group(1) if arrival else None,
             "demand": html.unescape(demand.group(1)).strip() if demand else "",
             "tariffs": tariffs,
+            "_cards": cards,
         }
+
+    # ------------------------------------------------------------- scroll --
+    def swipe_list(self, cards, reverse=False) -> bool:
+        """Tarif ro'yxatini keyingi kartalarga suradi (gorizontal yoki vertikal).
+
+        Ko'rinib turgan kartalar qaysi o'q bo'yicha yoyilgan bo'lsa, shu o'q
+        bo'yicha oxirgisidan birinchisiga qarab suriladi. False — surib bo'lmadi.
+        """
+        if not cards:
+            return False
+        xs = sorted(c[0] for c in cards)
+        ys = sorted(c[1] for c in cards)
+        if xs[-1] - xs[0] >= ys[-1] - ys[0]:
+            y = ys[len(ys) // 2]
+            x1, x2 = (xs[-1], xs[0]) if xs[-1] - xs[0] >= 300 else (900, 250)
+            args = [x2, y, x1, y] if reverse else [x1, y, x2, y]
+        else:
+            x = xs[len(xs) // 2]
+            y1, y2 = (ys[-1], ys[0]) if ys[-1] - ys[0] >= 300 else (ys[-1], ys[-1] - 600)
+            args = [x, y2, x, y1] if reverse else [x, y1, x, y2]
+        r = self.adb(["shell", "input", "swipe", *[str(int(v)) for v in args], "400"], 10)
+        if RX_DENIED.search((r.stdout + r.stderr).decode("utf-8", "replace")):
+            log.warning("swipe rad etildi: 'USB debugging (Security settings)' yoqilmagan")
+            return False
+        time.sleep(0.8)
+        return True
+
+    def scroll_collect(self, result: dict, read, stop=("business",), top_first=False) -> dict:
+        """Business topilguncha ro'yxatni surib, yangi tariflarni qo'shadi.
+
+        read() — joriy ekranni o'qib, parse natijasini (yoki None) qaytaradi.
+        top_first — avval ro'yxat boshiga suriladi (Uklon'da Layt tepada yashiringan).
+        """
+        swipes = 0
+        if top_first:
+            result["swipes"] = 0
+            self._scroll(result, read, reverse=True, stop=(), limit=2)
+            swipes = result["swipes"]
+        self._scroll(result, read, reverse=False, stop=stop, limit=MAX_SWIPES, start=swipes)
+        return result
+
+    def _scroll(self, result, read, reverse, stop, limit, start=0):
+        swipes = start
+        cards = result.get("_cards")
+        while swipes - start < limit and not any(t.get("code") in stop for t in result["tariffs"]):
+            if not self.swipe_list(cards, reverse=reverse):
+                break
+            swipes += 1
+            # Xaritadagi mashinalar harakatlanib tursa uiautomator ba'zan
+            # "could not get idle state" beradi — bir necha marta qayta o'qiymiz
+            nxt = None
+            for _ in range(3):
+                nxt = read()
+                if nxt:
+                    break
+                time.sleep(0.5)
+            if not nxt:
+                break
+            cards = nxt.get("_cards")
+            if not merge_tariffs(result["tariffs"], nxt["tariffs"]):
+                break  # ro'yxat oxiri
+        result["swipes"] = swipes
 
     def quote(self, s_lat, s_lng, e_lat, e_lng) -> dict:
         t0 = time.monotonic()
@@ -255,6 +368,7 @@ class Phone:
             parsed = self.parse(self.dump_xml())
             if parsed:
                 if prev and parsed["tariffs"] == prev["tariffs"]:
+                    self.scroll_collect(parsed, lambda: self.parse(self.dump_xml()))
                     parsed["seconds"] = round(time.monotonic() - t0, 1)
                     return parsed
                 prev = parsed
@@ -331,6 +445,9 @@ class Phone:
             "arrival": None,
             "demand": "",
             "tariffs": tariffs,
+            # Tarif nomlari qatori bo'yicha suramiz — narx qatorida surish
+            # WB'da tarif oynasini yopib yuborardi
+            "_cards": [(cx, cy) for _, cx, cy in names],
         }
 
     def quote_wb(self, s_lat, s_lng, e_lat, e_lng) -> dict:
@@ -368,38 +485,239 @@ class Phone:
             # Oldingi probe ekrani o'zgarmagan bo'lsa — bu eski narx (deeplink
             # hali ishlanmagan). Bir xil marshrut qayta so'ralgan bo'lishi ham
             # mumkin, shuning uchun 8 s dan keyin qabul qilamiz.
-            stale = parsed == self.wb_last and time.monotonic() - t_link < 8
+            stale = (parsed is not None and (parsed["from"], parsed["to"]) == self.wb_last
+                     and time.monotonic() - t_link < 8)
             if parsed and parsed["from"] and parsed["to"] and not stale:
                 if prev and parsed == prev:
-                    self.wb_last = dict(parsed)
+                    self.wb_last = (parsed["from"], parsed["to"])
+                    # WB'da Business yo'q — ro'yxat Electro bilan tugaydi
+                    self.scroll_collect(parsed, lambda: self.wb_parse(self.wb_nodes()),
+                                        stop=("business", "electro"))
                     parsed["seconds"] = round(time.monotonic() - t0, 1)
                     return parsed
                 prev = parsed
             else:
                 time.sleep(0.4)
         if prev:
-            self.wb_last = dict(prev)
+            self.wb_last = (prev["from"], prev["to"])
             prev["seconds"] = round(time.monotonic() - t0, 1)
             prev["unstable"] = True
             return prev
         raise ProbeError("timeout", f"{self.probe_timeout:.0f} soniyada WB narxi chiqmadi")
 
+    # --------------------------------------------------------------- Uklon --
+    def labels(self) -> list[tuple[str, float, float]]:
+        """text yoki content-desc bor barcha tugunlar (Uklon narxni desc'da beradi)."""
+        try:
+            root = ET.fromstring(self.dump_xml())
+        except ET.ParseError:
+            return []
+        out = []
+        for n in root.iter("node"):
+            t = (n.get("text") or n.get("content-desc") or "").strip()
+            m = RX_BOUNDS.match(n.get("bounds") or "")
+            if t and m:
+                l, tp, r, b = map(int, m.groups())
+                out.append((t, (l + r) / 2, (tp + b) / 2))
+        return out
+
+    @staticmethod
+    def uklon_parse(labels) -> dict | None:
+        tariffs, cards, frm, to = [], [], "", ""
+        for t, cx, cy in labels:
+            m = RX_UK_PRODUCT.search(t)
+            if m:
+                name = m.group("n").strip()
+                cards.append((cx, cy))  # "dan" narxli karta ham surish uchun kerak
+                if m.group("f"):
+                    continue  # "dan 12 000" — aniq narx emas, solishtirib bo'lmaydi
+                eta = RX_UK_ETA.search(t)
+                tariffs.append({
+                    "tariff": name,
+                    "code": UK_TARIFF_CODES.get(name.lower()),
+                    "price": int(re.sub(r"\D", "", m.group("p"))),
+                    "pickup_min": int(eta.group("e")) if eta else None,
+                    "notes": [],
+                })
+                continue
+            m = RX_UK_FROM.search(t)
+            if m and not frm:
+                frm = m.group("a")
+            m = RX_UK_TO.search(t)
+            if m and not to:
+                to = m.group("a")
+        if not tariffs and not cards:
+            return None
+        return {"from": frm, "to": to, "trip_min": None, "arrival": None, "demand": "",
+                "tariffs": tariffs, "_cards": cards}
+
+    def set_mock_location(self, lat, lng):
+        """Telefonga test GPS joylashuvi (adb shell'ning mock_location ruxsati bilan)."""
+        cmds = ["appops set com.android.shell android:mock_location allow"]
+        for p in MOCK_PROVIDERS:
+            cmds += [f"cmd location providers add-test-provider {p}",
+                     f"cmd location providers set-test-provider-enabled {p} true"]
+        self.shell_out("; ".join(c + " >/dev/null 2>&1" for c in cmds), 20)
+        self.update_mock_location(lat, lng)
+
+    def update_mock_location(self, lat, lng):
+        self.shell_out("; ".join(
+            f"cmd location providers set-test-provider-location {p} "
+            f"--location {lat:.6f},{lng:.6f} --accuracy 5 >/dev/null 2>&1"
+            for p in MOCK_PROVIDERS), 15)
+
+    def clear_mock_location(self):
+        cmds = [f"cmd location providers remove-test-provider {p}" for p in MOCK_PROVIDERS]
+        cmds.append("appops set com.android.shell android:mock_location deny")
+        try:
+            self.shell_out("; ".join(c + " >/dev/null 2>&1" for c in cmds), 20)
+        except ProbeError as e:
+            log.warning("mock joylashuvni olib tashlab bo'lmadi: %s", e.message)
+
+    def phone_location(self):
+        out = self.shell_out("dumpsys location | grep 'last location=Location'", 10)
+        m = RX_LOCATION.search(out)
+        return (float(m.group(1)), float(m.group(2))) if m else None
+
+    def quote_uklon(self, s_lat, s_lng, e_lat, e_lng) -> dict:
+        """Uklon: geo:LAT,LON faqat manzilni beradi, pickup — telefon GPS'i.
+
+        Probe paytida telefonga so'ralgan boshlanish nuqtasi test GPS sifatida
+        beriladi, tugagach olib tashlanadi.
+        """
+        t0 = time.monotonic()
+        self.ensure_ready()
+        real = self.phone_location()
+        if real and haversine_m(s_lat, s_lng, *real) <= UK_NEAR_M:
+            # Foydalanuvchi telefon turgan joydan chiqyapti — mock shart emas
+            res = self._quote_uklon(s_lat, s_lng, e_lat, e_lng, t0, mock=False)
+            if res["from"]:
+                self.uk_home.add(res["from"])
+            return res
+        self.set_mock_location(s_lat, s_lng)
+        try:
+            for attempt in range(UK_MOCK_ATTEMPTS):
+                # Google joylashuv xizmati test nuqtani darhol olmaydi — uzatib turamiz
+                warm_until = time.monotonic() + UK_MOCK_WARMUP * (attempt + 1)
+                while time.monotonic() < warm_until:
+                    self.update_mock_location(s_lat, s_lng)
+                    time.sleep(0.3)
+                res = self._quote_uklon(s_lat, s_lng, e_lat, e_lng, t0, mock=True)
+                if not self._uk_is_home(res["from"], s_lat, s_lng):
+                    res["mock_attempts"] = attempt + 1
+                    return res
+                log.info("Uklon test GPS'ni olmadi (pickup: %s), qayta urinish", res["from"])
+            raise ProbeError("mock_failed", "Uklon telefonning haqiqiy joylashuvini oldi")
+        finally:
+            self.clear_mock_location()
+
+    def _uk_is_home(self, frm, s_lat, s_lng) -> bool:
+        """Pickup telefonning haqiqiy joyi bo'lib qoldimi (test GPS ishlamagan)?
+
+        Bir xil pickup manzili bir-biridan uzoq ikki so'rovda chiqsa — bu GPS
+        bo'yicha "uy" manzili; keyingi safar uni mock xatosi deb taniymiz.
+        """
+        if not frm:
+            return False
+        if frm in self.uk_home:
+            return True
+        prev = self.uk_seen.get(frm)
+        self.uk_seen[frm] = (s_lat, s_lng)
+        if prev and haversine_m(s_lat, s_lng, *prev) > 1000:
+            self.uk_home.add(frm)
+            return True
+        return False
+
+    def _quote_uklon(self, s_lat, s_lng, e_lat, e_lng, t0, mock) -> dict:
+        t_start = time.monotonic()
+        self.adb(["shell", "am", "force-stop", UK_PKG], 15)
+        url = f"geo:{e_lat:.6f},{e_lng:.6f}"
+        r = self.adb(["shell", f"am start -a android.intent.action.VIEW -p {UK_PKG} -d '{url}'"], 15)
+        out = (r.stdout + r.stderr).decode("utf-8", "replace")
+        if "Error" in out:
+            raise ProbeError("launch_failed", out.strip()[:300])
+        prev = None
+        while time.monotonic() - t_start < self.probe_timeout:
+            # Ilova joylashuvni qayta so'rashi mumkin — test nuqtani yangilab turamiz
+            if mock:
+                self.update_mock_location(s_lat, s_lng)
+            parsed = self.uklon_parse(self.labels())
+            if parsed and parsed["tariffs"]:
+                if prev and parsed["tariffs"] == prev["tariffs"]:
+                    self.scroll_collect(parsed, lambda: self.uklon_parse(self.labels()),
+                                        top_first=True)
+                    parsed["seconds"] = round(time.monotonic() - t0, 1)
+                    return parsed
+                prev = parsed
+            else:
+                time.sleep(0.4)
+        if prev:
+            prev["seconds"] = round(time.monotonic() - t0, 1)
+            prev["unstable"] = True
+            return prev
+        raise ProbeError("timeout", f"{self.probe_timeout:.0f} soniyada Uklon narxi chiqmadi")
+
     def quote_for(self, provider, s_lat, s_lng, e_lat, e_lng) -> dict:
         if provider == "wb":
             return self.quote_wb(s_lat, s_lng, e_lat, e_lng)
+        if provider == "uklon":
+            return self.quote_uklon(s_lat, s_lng, e_lat, e_lng)
         return self.quote(s_lat, s_lng, e_lat, e_lng)
 
 
 # --------------------------------------------------------------------------- #
 # Navbat, kesh, saqlash
 # --------------------------------------------------------------------------- #
+# Telefon navbatida ustuvorlik: kichik son — oldin. Uklon sekin (~30 s), shuning
+# uchun Yandex va WB uni kutmasin.
+PRIORITY = {"yandex": 0, "wb": 0, "uklon": 1}
+# Uklon navbatda Yandex + WB tugashini kutadi
+MAX_WAIT_EXTRA = {"uklon": 60}
+
+
+class PriorityLock:
+    """Bitta telefon uchun ustuvorlikli qulf (bir xil ustuvorlikda — kelish tartibi)."""
+
+    def __init__(self):
+        self.cv = threading.Condition()
+        self.busy = False
+        self.waiting = []  # [(priority, seq)]
+        self.seq = 0
+
+    def locked(self) -> bool:
+        return self.busy
+
+    def acquire(self, priority: int, timeout: float) -> bool:
+        with self.cv:
+            self.seq += 1
+            me = (priority, self.seq)
+            self.waiting.append(me)
+            deadline = time.monotonic() + timeout
+            try:
+                while self.busy or min(self.waiting) != me:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        return False
+                    self.cv.wait(left)
+                self.busy = True
+                return True
+            finally:
+                self.waiting.remove(me)
+                self.cv.notify_all()
+
+    def release(self):
+        with self.cv:
+            self.busy = False
+            self.cv.notify_all()
+
+
 class QuoteService:
     def __init__(self, phone: Phone, data_dir: Path, fresh_seconds: float, max_wait: float):
         self.phone = phone
         self.data_dir = data_dir
         self.fresh_seconds = fresh_seconds
         self.max_wait = max_wait
-        self.phone_lock = threading.Lock()
+        self.phone_lock = PriorityLock()
         self.mu = threading.Lock()
         self.cache: dict[tuple, dict] = {}
         self.inflight: dict[tuple, threading.Event] = {}
@@ -434,7 +752,7 @@ class QuoteService:
 
         if not owner:
             # Xuddi shu marshrut hozir o'lchanmoqda — natijasini kutamiz
-            ev.wait(self.max_wait + self.phone.probe_timeout)
+            ev.wait(self.max_wait + MAX_WAIT_EXTRA.get(provider, 0) + 2 * self.phone.probe_timeout)
             with self.mu:
                 hit = self._fresh(key)
             if hit:
@@ -442,7 +760,8 @@ class QuoteService:
             raise ProbeError("busy", "parallel probe muvaffaqiyatsiz tugadi")
 
         try:
-            if not self.phone_lock.acquire(timeout=self.max_wait):
+            if not self.phone_lock.acquire(PRIORITY.get(provider, 0),
+                                           self.max_wait + MAX_WAIT_EXTRA.get(provider, 0)):
                 raise ProbeError("busy", "telefon band, navbat juda uzun")
             try:
                 res = self.phone.quote_for(provider, s_lat, s_lng, e_lat, e_lng)
@@ -490,7 +809,7 @@ class QuoteService:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
-ERROR_STATUS = {"busy": 503, "phone_locked": 503, "screen_off": 503, "no_device": 503,
+ERROR_STATUS = {"mock_failed": 503, "busy": 503, "phone_locked": 503, "screen_off": 503, "no_device": 503,
                 "timeout": 504, "adb_timeout": 504}
 
 

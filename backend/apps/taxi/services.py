@@ -166,12 +166,18 @@ def aggregate_estimates(
     # Yandex va WB narxi FAQAT telefondan (real) olinadi — eski formula ular uchun
     # ishlatilmaydi (pastda kommentda). Qolgan brendlar formula bilan hisoblanadi.
     # live=False (quick_local_prices — sun'iy namunaviy yo'l) bo'lsa hammasi formula.
-    live_services = [s for s in services if live and live_yandex.provider_of(s)]
+    #
+    # Uklon (YANDEX_LIVE_STRICT da yo'q provider) — "yumshoq": real narx tayyor
+    # bo'lsa ishlatiladi, bo'lmasa formula. Javob uni kutmaydi (Uklon probe'i
+    # ~30 s, pickup'ni test GPS orqali beradi va har doim ham ulgurmaydi).
+    strict = set(settings.YANDEX_LIVE_STRICT)
+    live_services = [s for s in services
+                     if live and live_yandex.provider_of(s) in strict]
     services = [s for s in services if s not in live_services]
     providers = []
-    for s in live_services:
-        p = live_yandex.provider_of(s)
-        if p not in providers:
+    for s in live_services + services:
+        p = live_yandex.provider_of(s) if live else None
+        if p and p not in providers:
             providers.append(p)
 
     def _mark_unavailable(provider, reason):
@@ -186,11 +192,13 @@ def aggregate_estimates(
     live_futures = {}
     if providers and stops:
         for p in providers:
-            _mark_unavailable(p, "Oraliq to'xtashli marshrutda real narx olinmaydi")
+            if p in strict:
+                _mark_unavailable(p, "Oraliq to'xtashli marshrutda real narx olinmaydi")
         providers = []
     for p in list(providers):
         if not live_yandex.is_enabled(p):
-            _mark_unavailable(p, "Real narx servisi o'chiq")
+            if p in strict:
+                _mark_unavailable(p, "Real narx servisi o'chiq")
             providers.remove(p)
     live_started = time.monotonic()
     if providers:
@@ -261,12 +269,17 @@ def aggregate_estimates(
     #     futures_wait(not_done, timeout=min(..., settings.YANDEX_LIVE_EXTRA_WAIT))
     live_quotes = {}
     if live_futures:
-        futures_wait(list(live_futures.values()),
-                     timeout=max(0.0, live_started + settings.YANDEX_LIVE_WAIT - time.monotonic()))
+        # Faqat Yandex/WB kutiladi; Uklon tayyor bo'lsa olinadi, bo'lmasa fonda
+        # tugab keshga tushadi va keyingi yangilanishda chiqadi
+        strict_futures = [f for p, f in live_futures.items() if p in strict]
+        if strict_futures:
+            futures_wait(strict_futures, timeout=max(
+                0.0, live_started + settings.YANDEX_LIVE_WAIT - time.monotonic()))
         for p, fut in live_futures.items():
             if not fut.done():
-                logger.info("Live %s %.0f s da ulgurmadi", p, settings.YANDEX_LIVE_WAIT)
-                _mark_unavailable(p, "Real narx hali olinmadi — bir necha soniyadan keyin chiqadi")
+                if p in strict:
+                    logger.info("Live %s %.0f s da ulgurmadi", p, settings.YANDEX_LIVE_WAIT)
+                    _mark_unavailable(p, "Real narx hali olinmadi — bir necha soniyadan keyin chiqadi")
                 continue
             try:
                 q = fut.result()
@@ -275,7 +288,7 @@ def aggregate_estimates(
                 q = None
             if q:
                 live_quotes[p] = q
-            else:
+            elif p in strict:
                 _mark_unavailable(p, "Real narxni hozir olib bo'lmadi")
         live_pool.shutdown(wait=False)
     live_prices = {p: live_yandex.prices_by_tier(q, p) for p, q in live_quotes.items()}
@@ -344,6 +357,13 @@ def aggregate_estimates(
     def _live_price(service):
         """Telefondan o'qilgan narx yoki None."""
         return live_prices.get(live_yandex.provider_of(service), {}).get(service.tier)
+
+    # Uklon (yumshoq): real narx bo'lsa formulani almashtiradi
+    for service, result in fetched:
+        if service not in live_services:
+            lp = _live_price(service)
+            if lp:
+                result.price_uzs, result.source = lp, "live"
 
     results = []
     for service, result in fetched:
@@ -422,6 +442,7 @@ def aggregate_estimates(
                     service, r_route["distance_km"], r_route["duration_min"]
                 )
                 price = _apply_region(price, service.minimum_fare_uzs)
+                price = _live_price(service) or price  # Uklon real narxi bo'lsa
             per_service.append({
                 "service_id": service.id,
                 "service_code": service.code,
