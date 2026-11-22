@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Yandex Go real narx servisi: HTTP so'rov -> telefon (adb + uiautomator) -> JSON.
+"""Taksi real narx servisi (Yandex Go, WB Taxi): HTTP -> telefon (adb + uiautomator) -> JSON.
 
 Bitta telefon bor, shuning uchun so'rovlar navbat bilan bajariladi:
   * bir vaqtda bitta probe (phone_lock);
@@ -11,9 +11,11 @@ Har bir haqiqiy probe data/quotes-YYYY-MM.jsonl ga yoziladi (ML uchun).
 Ishga tushirish:
   python3 server.py serve                      # .env dan sozlamalar
   python3 server.py probe --end 41.3111 69.2797  # bir martalik test
+  python3 server.py probe --provider wb --start 41.2995 69.2010 --end 41.3111 69.2797
 
 API:
-  POST /v1/quote   {"start_lat":..,"start_lng":..,"end_lat":..,"end_lng":..}
+  POST /v1/quote   {"start_lat":..,"start_lng":..,"end_lat":..,"end_lng":..,
+                    "provider": "yandex" | "wb"}   (provider bo'lmasa — yandex)
   GET  /v1/health
   Sarlavha: X-Api-Key: <PROBE_API_KEY>
 """
@@ -22,6 +24,7 @@ import hmac
 import html
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -31,6 +34,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 BASE_DIR = Path(__file__).resolve().parent
 PKG = "ru.yandex.taxi"
@@ -63,6 +67,31 @@ TARIFF_CODES = {
     "elektro": "electro", "electric": "electro", "электро": "electro",
     "birga": "carpool", "carpool": "carpool", "вместе": "carpool",
 }
+
+# --- WB Taxi (uz.wildberries.taxi.client, Citymobil asosida) ---
+#   ekran: "Standard" / "27 500 сўм" (nom narx tepasida), pastda pickup va manzil
+WB_PKG = "uz.wildberries.taxi.client"
+RX_BOUNDS = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
+RX_WB_PRICE = re.compile(r"^\d[\d\s]*\d\s*\D{1,8}$")
+RX_WB_MIN = re.compile(r"^\d+\s*(?:min|мин|daq)\.?$", re.I)
+WB_TARIFF_CODES = {
+    "standard": "standard", "стандарт": "standard", "standart": "standard",
+    "comfort": "comfort", "комфорт": "comfort", "komfort": "comfort",
+    "comfort+": "comfort_plus", "комфорт+": "comfort_plus", "komfort+": "comfort_plus",
+    "business": "business", "бизнес": "business", "biznes": "business",
+    "premium": "premium", "minivan": "minivan", "минивэн": "minivan",
+    "electro": "electro", "child": "child", "детский": "child",
+}
+WB_UI = {"0", "cash", "наличные", "naqd", "entrance", "подъезд", "multi", "preferences",
+         "пожелания", "request ride", "заказать", "pickup", "подача", "on the way", "в пути",
+         "no watermelons yet", "pay by card to earn them"}
+
+
+def wb_norm(t: str) -> str:
+    return re.sub(r"\s+", "", t).lower()
+
+
+PROVIDERS = ("yandex", "wb")
 
 # O'zbekiston chegarasi (taxminan) — tashqaridagi koordinatalar rad etiladi
 LAT_RANGE = (37.0, 46.0)
@@ -232,6 +261,124 @@ class Phone:
             return prev
         raise ProbeError("timeout", f"{self.probe_timeout:.0f} soniyada narx chiqmadi")
 
+    # ------------------------------------------------------------------ WB --
+    def focus(self) -> str:
+        return self.shell_out("dumpsys window | grep -m1 mCurrentFocus", 10)
+
+    def wb_nodes(self) -> list[tuple[str, float, float]]:
+        try:
+            root = ET.fromstring(self.dump_xml())
+        except ET.ParseError:
+            return []
+        nodes = []
+        for n in root.iter("node"):
+            t = (n.get("text") or "").strip()
+            m = RX_BOUNDS.match(n.get("bounds") or "")
+            if t and m:
+                l, tp, r, b = map(int, m.groups())
+                nodes.append((t, (l + r) / 2, (tp + b) / 2))
+        return nodes
+
+    @staticmethod
+    def wb_parse(nodes) -> dict | None:
+        def is_price(t):
+            return bool(RX_WB_PRICE.match(t)) and len(re.sub(r"\D", "", t)) >= 4
+
+        prices = [x for x in nodes if is_price(x[0])]
+        names = [x for x in nodes if wb_norm(x[0]) in WB_TARIFF_CODES]
+        if not prices or not names:
+            return None
+        tariffs = []
+        for t, cx, cy in sorted(prices, key=lambda x: x[1]):
+            # Tarif nomi narxning tepasida turadi — eng yaqin nom
+            nm = min(names, key=lambda n: math.hypot(cx - n[1], (cy - n[2]) * 0.5))
+            tariffs.append({
+                "tariff": nm[0],
+                "code": WB_TARIFF_CODES[wb_norm(nm[0])],
+                "price": int(re.sub(r"\D", "", t)),
+                "pickup_min": None,
+                "notes": [],
+            })
+
+        def minutes_below(labels):
+            """"Pickup" / "On the way" yorlig'i ostidagi "5 min" qiymati."""
+            for t, cx, cy in nodes:
+                if t.lower() in labels:
+                    below = [(abs(cx - x) + (y - cy), t2) for t2, x, y in nodes
+                             if y > cy and RX_WB_MIN.match(t2)]
+                    if below:
+                        return int(re.match(r"\d+", min(below)[1]).group())
+            return None
+
+        pickup_min = minutes_below({"pickup", "подача", "yetkazish"})
+        for t in tariffs:
+            t["pickup_min"] = pickup_min
+
+        # Manzillar narxlar qatoridan pastda: birinchisi — qayerdan, ikkinchisi — qayerga
+        row_y = max(p[2] for p in prices)
+        addr = [t for t, _, cy in sorted(nodes, key=lambda x: x[2])
+                if cy > row_y and not is_price(t) and wb_norm(t) not in WB_TARIFF_CODES
+                and t.lower() not in WB_UI and not RX_WB_MIN.match(t)]
+        return {
+            "from": addr[0] if addr else "",
+            "to": addr[1] if len(addr) > 1 else "",
+            "trip_min": minutes_below({"on the way", "в пути", "yo'lda"}),
+            "arrival": None,
+            "demand": "",
+            "tariffs": tariffs,
+        }
+
+    def quote_wb(self, s_lat, s_lng, e_lat, e_lng) -> dict:
+        """WB Taxi: deeplink wb-taxi://ride?from=lat,lon&to=lat,lon.
+
+        MUHIM: ilova noldan (cold) ochilsa, `from` ni GPS joylashuvi bilan
+        almashtirib yuboradi. Shuning uchun ilovani yopmaymiz — avval ochiq
+        turganiga ishonch hosil qilamiz, keyin deeplink yuboramiz.
+        """
+        t0 = time.monotonic()
+        self.ensure_ready()
+        if WB_PKG not in self.focus():
+            self.adb(["shell", "monkey", "-p", WB_PKG, "-c",
+                      "android.intent.category.LAUNCHER", "1"], 15)
+            while time.monotonic() - t0 < 15:
+                time.sleep(1)
+                if WB_PKG in self.focus() and len(self.wb_nodes()) >= 4:
+                    break
+            time.sleep(1)  # GPS bo'yicha pickup o'rnatilib bo'lsin
+        # Oldingi marshrut tariflari ekranda qolgan bo'lsa — bosh ekranga qaytamiz,
+        # aks holda eski narx yangisi deb o'qilib ketardi
+        for _ in range(3):
+            if not self.wb_parse(self.wb_nodes()):
+                break
+            self.adb(["shell", "input", "keyevent", "KEYCODE_BACK"], 10)
+            time.sleep(1)
+        url = f"wb-taxi://ride?from={s_lat:.6f},{s_lng:.6f}&to={e_lat:.6f},{e_lng:.6f}"
+        r = self.adb(["shell", f"am start -a android.intent.action.VIEW -p {WB_PKG} -d '{url}'"], 15)
+        out = (r.stdout + r.stderr).decode("utf-8", "replace")
+        if "Error" in out:
+            raise ProbeError("launch_failed", out.strip()[:300])
+
+        prev = None
+        while time.monotonic() - t0 < self.probe_timeout:
+            parsed = self.wb_parse(self.wb_nodes())
+            if parsed and parsed["from"] and parsed["to"]:
+                if prev and parsed == prev:
+                    parsed["seconds"] = round(time.monotonic() - t0, 1)
+                    return parsed
+                prev = parsed
+            else:
+                time.sleep(0.4)
+        if prev:
+            prev["seconds"] = round(time.monotonic() - t0, 1)
+            prev["unstable"] = True
+            return prev
+        raise ProbeError("timeout", f"{self.probe_timeout:.0f} soniyada WB narxi chiqmadi")
+
+    def quote_for(self, provider, s_lat, s_lng, e_lat, e_lng) -> dict:
+        if provider == "wb":
+            return self.quote_wb(s_lat, s_lng, e_lat, e_lng)
+        return self.quote(s_lat, s_lng, e_lat, e_lng)
+
 
 # --------------------------------------------------------------------------- #
 # Navbat, kesh, saqlash
@@ -250,9 +397,9 @@ class QuoteService:
         data_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
-    def key(s_lat, s_lng, e_lat, e_lng):
+    def key(provider, s_lat, s_lng, e_lat, e_lng):
         # ~10 m aniqlik: shu oraliqdagi so'rovlar bitta marshrut hisoblanadi
-        return tuple(round(x, 4) for x in (s_lat, s_lng, e_lat, e_lng))
+        return (provider,) + tuple(round(x, 4) for x in (s_lat, s_lng, e_lat, e_lng))
 
     def _fresh(self, key):
         hit = self.cache.get(key)
@@ -260,8 +407,8 @@ class QuoteService:
             return hit
         return None
 
-    def get(self, s_lat, s_lng, e_lat, e_lng) -> dict:
-        key = self.key(s_lat, s_lng, e_lat, e_lng)
+    def get(self, s_lat, s_lng, e_lat, e_lng, provider="yandex") -> dict:
+        key = self.key(provider, s_lat, s_lng, e_lat, e_lng)
         with self.mu:
             # eskirgan kesh yozuvlarini tozalash
             now = time.monotonic()
@@ -288,9 +435,10 @@ class QuoteService:
             if not self.phone_lock.acquire(timeout=self.max_wait):
                 raise ProbeError("busy", "telefon band, navbat juda uzun")
             try:
-                res = self.phone.quote(s_lat, s_lng, e_lat, e_lng)
+                res = self.phone.quote_for(provider, s_lat, s_lng, e_lat, e_lng)
             finally:
                 self.phone_lock.release()
+            res["provider"] = provider
             res["probed_at"] = datetime.now(timezone.utc).isoformat()
             res["_t"] = time.monotonic()
             with self.mu:
@@ -298,7 +446,8 @@ class QuoteService:
             self._save(True, (s_lat, s_lng, e_lat, e_lng), res)
             return self._public(res, cached=False)
         except ProbeError as e:
-            self._save(False, (s_lat, s_lng, e_lat, e_lng), {"error": e.code, "message": e.message})
+            self._save(False, (s_lat, s_lng, e_lat, e_lng),
+                       {"provider": provider, "error": e.code, "message": e.message})
             raise
         finally:
             with self.mu:
@@ -385,11 +534,15 @@ def make_handler(service: QuoteService, api_key: str):
                 return self._send(400, {"ok": False, "error": "bad_request",
                                         "message": "start_lat, start_lng, end_lat, end_lng kerak"})
             s_lat, s_lng, e_lat, e_lng = coords
+            provider = str(body.get("provider") or "yandex")
+            if provider not in PROVIDERS:
+                return self._send(400, {"ok": False, "error": "bad_provider",
+                                        "message": f"provider: {', '.join(PROVIDERS)}"})
             for lat, lng in ((s_lat, s_lng), (e_lat, e_lng)):
                 if not (LAT_RANGE[0] <= lat <= LAT_RANGE[1] and LNG_RANGE[0] <= lng <= LNG_RANGE[1]):
                     return self._send(400, {"ok": False, "error": "out_of_range"})
             try:
-                res = service.get(s_lat, s_lng, e_lat, e_lng)
+                res = service.get(s_lat, s_lng, e_lat, e_lng, provider)
             except ProbeError as e:
                 log.warning("probe xato: %s %s", e.code, e.message)
                 return self._send(ERROR_STATUS.get(e.code, 502),
@@ -412,13 +565,15 @@ def main():
     pr = sub.add_parser("probe", help="bir martalik test")
     pr.add_argument("--start", nargs=2, type=float, default=[41.2755, 69.2030])
     pr.add_argument("--end", nargs=2, type=float, default=[41.3111, 69.2797])
+    pr.add_argument("--provider", choices=PROVIDERS, default="yandex")
     a = p.parse_args()
 
     phone = Phone(os.environ.get("ADB_SERIAL"), float(os.environ.get("PROBE_TIMEOUT", "30")))
 
     if a.cmd == "probe":
         try:
-            print(json.dumps(phone.quote(*a.start, *a.end), ensure_ascii=False, indent=2))
+            print(json.dumps(phone.quote_for(a.provider, *a.start, *a.end),
+                             ensure_ascii=False, indent=2))
         except ProbeError as e:
             print(f"{e.code}: {e.message}", file=sys.stderr)
             sys.exit(1)

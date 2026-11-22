@@ -220,8 +220,20 @@ YANDEX_GEOCODER_LANG = os.environ.get("YANDEX_GEOCODER_LANG", "ru_RU")
 #   YANDEX_LIVE_URL=http://<statik-ip>:3060
 YANDEX_LIVE_URL = os.environ.get("YANDEX_LIVE_URL", "").rstrip("/")
 YANDEX_LIVE_KEY = os.environ.get("YANDEX_LIVE_KEY", "")
-# Telefon navbati + probe (~11 s) uchun umumiy kutish; oshsa formula ishlatiladi
+# ESKI (endi ishlatilmaydi — YANDEX_LIVE_WAIT ga qarang): javob real narxni
+# shuncha kutardi, ulgurmasa formula ishlatilardi
 YANDEX_LIVE_TIMEOUT = float(os.environ.get("YANDEX_LIVE_TIMEOUT", "35"))
+# /taxi/estimate/ javobi Yandex VA WB real narxini shuncha soniyagacha kutadi
+# (nginx proxy_read_timeout 60 s dan kichik bo'lsin)
+YANDEX_LIVE_WAIT = float(os.environ.get("YANDEX_LIVE_WAIT", "55"))
+# ESKI: bir brend kelgach qolganini shuncha kutib, ulgurmaganiga formula
+# YANDEX_LIVE_EXTRA_WAIT = float(os.environ.get("YANDEX_LIVE_EXTRA_WAIT", "5"))
+# Probe servisiga HTTP so'rov chegarasi (telefon navbati + probe, ~45 + 30 s)
+YANDEX_LIVE_HTTP_TIMEOUT = float(os.environ.get("YANDEX_LIVE_HTTP_TIMEOUT", "80"))
+# Qaysi brendlar real narxi telefondan olinadi (probe servisidagi provider nomlari)
+YANDEX_LIVE_PROVIDERS = [
+    p.strip() for p in os.environ.get("YANDEX_LIVE_PROVIDERS", "yandex,wb").split(",") if p.strip()
+]
 # Bitta foydalanuvchi + marshrut uchun real narx shuncha soniya qayta ishlatiladi
 # (mobil ilova har 15 s so'raydi, telefonga esa bir marta boriladi)
 YANDEX_LIVE_REUSE_SECONDS = int(os.environ.get("YANDEX_LIVE_REUSE_SECONDS", "600"))
