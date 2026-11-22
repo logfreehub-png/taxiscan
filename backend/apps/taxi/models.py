@@ -280,7 +280,7 @@ class SearchHistory(models.Model):
 
 
 class LiveYandexQuote(models.Model):
-    """Telefondan olingan real Yandex Go narxi — FAQAT ML o'qitish uchun arxiv.
+    """Telefondan olingan real narx (Yandex Go, WB Taxi) — FAQAT ML o'qitish uchun arxiv.
 
     Mijozlarga hech qachon qayta ko'rsatilmaydi va cleanup_old_estimates
     bu jadvalni tozalamaydi. Har bir yozuv = telefonda bitta haqiqiy o'lchov.
@@ -289,6 +289,10 @@ class LiveYandexQuote(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="+",
+    )
+    provider = models.CharField(
+        "Brend", max_length=16, default="yandex", db_index=True,
+        help_text="yandex | wb — probe servisidagi provider nomi",
     )
     searcher_key = models.CharField(max_length=64, blank=True, db_index=True)
     search_id = models.UUIDField(null=True, blank=True, db_index=True)
@@ -310,7 +314,7 @@ class LiveYandexQuote(models.Model):
         help_text='[{"tariff": "Start", "price": 22000, "pickup_min": 3}, ...]',
     )
     probe_seconds = models.FloatField(null=True, blank=True)
-    probed_at = models.DateTimeField(null=True, blank=True)
+    probed_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     # Shu payt bizning hisob-kitob (model kalibrlash uchun)
     osrm_distance_km = models.FloatField(null=True, blank=True)

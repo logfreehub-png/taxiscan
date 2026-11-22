@@ -1,7 +1,7 @@
-"""Yandex Go real narxi — telefon servisidan (deploy/yandex_probe/server.py).
+"""Real taksi narxi (Yandex Go, WB Taxi) — telefon servisidan (deploy/yandex_probe/server.py).
 
 aggregate_estimates() buni OSRM bilan parallel chaqiradi. Servis o'chiq, band
-yoki sekin bo'lsa None qaytadi va Yandex narxi formula bilan hisoblanadi.
+yoki sekin bo'lsa None qaytadi va o'sha brend narxi formula bilan hisoblanadi.
 """
 import hashlib
 import logging
@@ -29,41 +29,67 @@ TIER_BY_TARIFF = {
 
 YANDEX_CODE_PREFIX = "yandex_go__"
 
+# WB Taxi ekranidagi tariflar: Standard / Comfort / Comfort + (Business yo'q)
+WB_TIER_BY_CODE = {
+    "standard": "econom",
+    "comfort": "comfort",
+    "comfort_plus": "comfort_plus",
+    "business": "business",
+}
 
-def is_enabled() -> bool:
-    return bool(settings.YANDEX_LIVE_URL and settings.YANDEX_LIVE_KEY)
+# provider (probe servisidagi nomi) -> TaxiService.code prefiksi va tarif xaritasi
+PROVIDERS = {
+    "yandex": {"prefix": YANDEX_CODE_PREFIX, "tiers": TIER_BY_CODE, "names": TIER_BY_TARIFF},
+    "wb": {"prefix": "wb_taxi__", "tiers": WB_TIER_BY_CODE, "names": {}},
+}
+
+
+def is_enabled(provider: str = "yandex") -> bool:
+    return bool(settings.YANDEX_LIVE_URL and settings.YANDEX_LIVE_KEY
+                and provider in settings.YANDEX_LIVE_PROVIDERS)
+
+
+def provider_of(service) -> str | None:
+    """Real narxi telefondan olinadigan brend bo'lsa — provider nomi."""
+    for name, meta in PROVIDERS.items():
+        if service.code.startswith(meta["prefix"]):
+            return name
+    return None
 
 
 def is_yandex_service(service) -> bool:
     return service.code.startswith(YANDEX_CODE_PREFIX)
 
 
-def fetch_quote(start_lat, start_lng, end_lat, end_lng) -> dict | None:
+def fetch_quote(start_lat, start_lng, end_lat, end_lng, provider="yandex") -> dict | None:
     """Servisdan real narx. Xatoda None (sababi logga yoziladi)."""
-    if not is_enabled():
+    if not is_enabled(provider):
         return None
     try:
         resp = requests.post(
             f"{settings.YANDEX_LIVE_URL}/v1/quote",
             json={
+                "provider": provider,
                 "start_lat": start_lat, "start_lng": start_lng,
                 "end_lat": end_lat, "end_lng": end_lng,
             },
             headers={"X-Api-Key": settings.YANDEX_LIVE_KEY},
-            timeout=(5, settings.YANDEX_LIVE_TIMEOUT),
+            # Telefon bitta: WB so'rovi Yandex tugashini navbatda kutadi
+            timeout=(5, settings.YANDEX_LIVE_HTTP_TIMEOUT),
         )
         data = resp.json()
     except (requests.RequestException, ValueError) as exc:
-        logger.warning("Yandex live servisi javob bermadi: %s", exc)
+        logger.warning("Live %s servisi javob bermadi: %s", provider, exc)
         return None
     if resp.status_code != 200 or not data.get("ok"):
-        logger.warning("Yandex live xato %s: %s %s", resp.status_code,
+        logger.warning("Live %s xato %s: %s %s", provider, resp.status_code,
                        data.get("error"), data.get("message"))
         return None
     return data
 
 
-def get_quote(searcher_key, start_lat, start_lng, end_lat, end_lng) -> dict | None:
+def get_quote(searcher_key, start_lat, start_lng, end_lat, end_lng,
+              provider="yandex") -> dict | None:
     """Telefonga bitta qidiruv uchun BIR MARTA murojaat qiladi.
 
     Mobil ilova har 15 soniyada /taxi/estimate/ ni qayta yuboradi. Shu
@@ -72,16 +98,17 @@ def get_quote(searcher_key, start_lat, start_lng, end_lat, end_lng) -> dict | No
     Muvaffaqiyatsiz urinish ham YANDEX_LIVE_FAIL_SECONDS ga eslab qolinadi
     (aks holda har yangilanishda telefon 30 s kutib qolardi).
     """
-    if not is_enabled():
+    if not is_enabled(provider):
         return None
     route = ",".join(f"{x:.4f}" for x in (start_lat, start_lng, end_lat, end_lng))
-    key = "ylive:" + hashlib.sha1(f"{searcher_key or ''}|{route}".encode()).hexdigest()
+    key = "ylive:" + hashlib.sha1(
+        f"{provider}|{searcher_key or ''}|{route}".encode()).hexdigest()
     hit = cache.get(key)
     if hit == "fail":
         return None
     if hit:
-        return {**hit, "cached": True}  # ML arxiviga qayta yozilmaydi
-    quote = fetch_quote(start_lat, start_lng, end_lat, end_lng)
+        return hit  # ML arxiviga probed_at bo'yicha bir marta yoziladi
+    quote = fetch_quote(start_lat, start_lng, end_lat, end_lng, provider)
     if quote:
         cache.set(key, quote, settings.YANDEX_LIVE_REUSE_SECONDS)
     else:
@@ -89,12 +116,13 @@ def get_quote(searcher_key, start_lat, start_lng, end_lat, end_lng) -> dict | No
     return quote
 
 
-def prices_by_tier(quote: dict) -> dict[str, int]:
+def prices_by_tier(quote: dict, provider: str = "yandex") -> dict[str, int]:
     """{"econom": 22000, "comfort": 25000, ...} — tanilmagan tariflar tashlab ketiladi."""
+    meta = PROVIDERS[provider]
     out = {}
     for t in quote.get("tariffs") or []:
-        tier = (TIER_BY_CODE.get(t.get("code") or "")
-                or TIER_BY_TARIFF.get(str(t.get("tariff", "")).strip().lower()))
+        tier = (meta["tiers"].get(t.get("code") or "")
+                or meta["names"].get(str(t.get("tariff", "")).strip().lower()))
         price = t.get("price")
         if tier and isinstance(price, int) and price > 0 and tier not in out:
             out[tier] = price

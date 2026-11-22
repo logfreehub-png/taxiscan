@@ -40,7 +40,9 @@ BRANDS = {
         "name": "WB Taxi",
         "color": "#7B2CBF",
         "website": "https://wbtaxi.uz",
-        "deeplink_template": "",
+        # Ilova (uz.wildberries.taxi.client) manifestidagi sxema: wb-taxi://ride
+        "deeplink_template": "wb-taxi://ride?"
+                             "from={start_lat},{start_lng}&to={end_lat},{end_lng}",
         # WB Taxi faqat Toshkent shahri ichida ishlaydi — shahar chegarasi (bbox,
         # ozgina zaxira bilan): g'arbda Uchtepa, sharqda Bektemir/TTZ, shimolda
         # Yunusobod, janubda Yangihayot. Chirchiq/G'azalkent/Chimyon TASHQARIDA.

@@ -2,8 +2,9 @@
 import time
 import uuid
 from datetime import timedelta
+from django.conf import settings
 from django.utils import timezone
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as futures_wait
 import logging
 from .models import TaxiService, PriceEstimate, Region, LiveYandexQuote
 from .providers import get_provider
@@ -162,15 +163,43 @@ def aggregate_estimates(
                 "start": {"lat": start_lat, "lng": start_lng},
                 "end": {"lat": end_lat, "lng": end_lng}}
 
-    # Yandex real narxi telefondan (~10 s) — OSRM bilan parallel boshlanadi.
-    # Oraliq to'xtashli marshrutda ishlatilmaydi: Yandex havolasi faqat A→B ni oladi.
-    live_pool = live_future = None
-    if (live and not stops and live_yandex.is_enabled()
-            and any(live_yandex.is_yandex_service(s) for s in services)):
-        live_pool = ThreadPoolExecutor(max_workers=1)
-        live_future = live_pool.submit(
-            live_yandex.get_quote, searcher_key, start_lat, start_lng, end_lat, end_lng
-        )
+    # Yandex va WB narxi FAQAT telefondan (real) olinadi — eski formula ular uchun
+    # ishlatilmaydi (pastda kommentda). Qolgan brendlar formula bilan hisoblanadi.
+    # live=False (quick_local_prices — sun'iy namunaviy yo'l) bo'lsa hammasi formula.
+    live_services = [s for s in services if live and live_yandex.provider_of(s)]
+    services = [s for s in services if s not in live_services]
+    providers = []
+    for s in live_services:
+        p = live_yandex.provider_of(s)
+        if p not in providers:
+            providers.append(p)
+
+    def _mark_unavailable(provider, reason):
+        for s in live_services:
+            brand = s.brand or s.name
+            if live_yandex.provider_of(s) == provider and brand not in unavailable:
+                unavailable[brand] = {"brand": brand, "area": "", "reason": reason}
+
+    # Real narx telefondan (Yandex ~12 s, WB ~15 s) — OSRM bilan parallel boshlanadi.
+    # Oraliq to'xtashli marshrutda olinmaydi: deeplink faqat A→B ni oladi.
+    live_pool = None
+    live_futures = {}
+    if providers and stops:
+        for p in providers:
+            _mark_unavailable(p, "Oraliq to'xtashli marshrutda real narx olinmaydi")
+        providers = []
+    for p in list(providers):
+        if not live_yandex.is_enabled(p):
+            _mark_unavailable(p, "Real narx servisi o'chiq")
+            providers.remove(p)
+    live_started = time.monotonic()
+    if providers:
+        live_pool = ThreadPoolExecutor(max_workers=len(providers))
+        live_futures = {
+            p: live_pool.submit(live_yandex.get_quote, searcher_key,
+                                start_lat, start_lng, end_lat, end_lng, p)
+            for p in providers
+        }
 
     # Oraliq to'xtashlar (A→...→B) — berilgan bo'lsa bitta yo'l, aks holda alternativlar
     waypoints = [(s["lat"], s["lng"]) for s in (stops or [])]
@@ -220,15 +249,40 @@ def aggregate_estimates(
     # demand statistikasi esa yozuvlarni emas, unikal qidiruvlarni sanaydi
     search_id = uuid.uuid4() if save else None
 
-    live_quote = None
-    if live_future is not None:
-        try:
-            live_quote = live_future.result()
-        except Exception as exc:  # fetch_quote o'zi ushlaydi, bu — zaxira
-            logger.warning("Yandex live: %s", exc)
+    # Telefon bitta — WB Yandex'dan keyin navbatda turadi. Javob Yandex VA WB real
+    # narxi kelguncha kutadi (mobil ilovada shu payt loading turadi), lekin
+    # YANDEX_LIVE_WAIT dan oshmaydi (nginx 60 s da uzib qo'ymasin). Ulgurmagan
+    # probe fonda tugab keshga tushadi va keyingi yangilanishda chiqadi.
+    #
+    # ESKI: birinchi brend kelgach qolganini 5 s kutib, ulgurmaganiga formula:
+    # deadline = live_started + settings.YANDEX_LIVE_TIMEOUT
+    # _, not_done = futures_wait(pending, timeout=..., return_when=FIRST_COMPLETED)
+    # if not_done:
+    #     futures_wait(not_done, timeout=min(..., settings.YANDEX_LIVE_EXTRA_WAIT))
+    live_quotes = {}
+    if live_futures:
+        futures_wait(list(live_futures.values()),
+                     timeout=max(0.0, live_started + settings.YANDEX_LIVE_WAIT - time.monotonic()))
+        for p, fut in live_futures.items():
+            if not fut.done():
+                logger.info("Live %s %.0f s da ulgurmadi", p, settings.YANDEX_LIVE_WAIT)
+                _mark_unavailable(p, "Real narx hali olinmadi — bir necha soniyadan keyin chiqadi")
+                continue
+            try:
+                q = fut.result()
+            except Exception as exc:  # fetch_quote o'zi ushlaydi, bu — zaxira
+                logger.warning("Live %s: %s", p, exc)
+                q = None
+            if q:
+                live_quotes[p] = q
+            else:
+                _mark_unavailable(p, "Real narxni hozir olib bo'lmadi")
         live_pool.shutdown(wait=False)
-    live_prices = live_yandex.prices_by_tier(live_quote) if live_quote else {}
-    yandex_formula_prices = {}  # ML uchun: shu paytdagi bizning hisob
+    live_prices = {p: live_yandex.prices_by_tier(q, p) for p, q in live_quotes.items()}
+    # ESKI: ML uchun shu brendlarning formula narxi ham yozilardi — endi formula
+    # Yandex/WB uchun umuman hisoblanmaydi.
+    # formula_prices = {p: {} for p in live_yandex.PROVIDERS}
+    unavailable_services = list(unavailable.values())
 
     def _fetch(service):
         provider = get_provider(service)
@@ -245,7 +299,7 @@ def aggregate_estimates(
             )
         return service, result
 
-    with ThreadPoolExecutor(max_workers=min(8, len(services))) as ex:
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(services)))) as ex:
         fetched = [(s, r) for s, r in ex.map(_fetch, services) if r.is_ok]
 
     # Chaqirilgan joy darajasi (region_level) — barcha brendga teng.
@@ -253,15 +307,43 @@ def aggregate_estimates(
     # u brend tartibini soxta aralashtirardi.
     for service, result in fetched:
         result.price_uzs = _apply_region(result.price_uzs, service.minimum_fare_uzs)
-        if live_yandex.is_yandex_service(service):
-            yandex_formula_prices[service.tier] = result.price_uzs
+        # ESKI: Yandex/WB formula narxi ML uchun yig'ilardi
+        # p = live_yandex.provider_of(service)
+        # if p:
+        #     formula_prices[p][service.tier] = result.price_uzs
 
-    # Telefondan real Yandex narxi bo'lsa — formulani almashtiradi. Ekranda
-    # bo'lmagan tariflar (masalan Business) real/formula nisbatiga moslanadi.
-    yandex_final = live_yandex.final_tier_prices(live_prices, yandex_formula_prices)
-    for service, result in fetched:
-        if live_yandex.is_yandex_service(service) and service.tier in yandex_final:
-            result.price_uzs, result.source = yandex_final[service.tier]
+    # ESKI: real narx formula bilan aralashtirilardi — ekranda yo'q tarif (Business)
+    # formula × (real/formula nisbati) bilan "live_est" bo'lib chiqardi.
+    # live_final = {
+    #     p: live_yandex.final_tier_prices(live_prices[p], formula_prices[p])
+    #     for p in live_prices
+    # }
+    # for service, result in fetched:
+    #     lp = _live_price(service)
+    #     if lp:
+    #         result.price_uzs, result.source = lp
+
+    # YANGI: Yandex/WB — faqat telefon ekranidan o'qilgan tariflar. Ekranda
+    # bo'lmagan tarif ro'yxatga chiqmaydi.
+    from .providers.base import EstimateResult
+    for service in live_services:
+        p = live_yandex.provider_of(service)
+        price = live_prices.get(p, {}).get(service.tier)
+        if not price:
+            continue
+        trip_min = live_quotes[p].get("trip_min")
+        fetched.append((service, EstimateResult(
+            service_code=service.code,
+            price_uzs=price,
+            distance_km=primary_route["distance_km"],
+            duration_min=trip_min or primary_route["duration_min"],
+            surge=1.0,
+            source="live",
+        )))
+
+    def _live_price(service):
+        """Telefondan o'qilgan narx yoki None."""
+        return live_prices.get(live_yandex.provider_of(service), {}).get(service.tier)
 
     results = []
     for service, result in fetched:
@@ -328,15 +410,18 @@ def aggregate_estimates(
     routes_with_prices = []
     for idx, r_route in enumerate(routes):
         per_service = []
-        for service in services:
-            price, surge = calculate_price(
-                service, r_route["distance_km"], r_route["duration_min"]
-            )
-            price = _apply_region(price, service.minimum_fare_uzs)
-            # Real narx faqat asosiy (Yandex o'zi tanlagan) yo'lga tegishli
-            if (idx == 0 and live_yandex.is_yandex_service(service)
-                    and service.tier in yandex_final):
-                price = yandex_final[service.tier][0]
+        for service in services + live_services:
+            if service in live_services:
+                # Yandex/WB: ilova o'zi yo'l tanlaydi — real narx har yo'lda bir xil.
+                # ESKI: muqobil yo'llarda formula ishlatilardi (calculate_price).
+                price = _live_price(service)
+                if not price:
+                    continue
+            else:
+                price, surge = calculate_price(
+                    service, r_route["distance_km"], r_route["duration_min"]
+                )
+                price = _apply_region(price, service.minimum_fare_uzs)
             per_service.append({
                 "service_id": service.id,
                 "service_code": service.code,
@@ -362,12 +447,12 @@ def aggregate_estimates(
             "prices": per_service,
         })
 
-    # Har bir YANGI telefon o'lchovi ML arxiviga yoziladi (keshdan kelgani emas)
-    if live_quote and not live_quote.get("cached"):
+    # Har bir telefon o'lchovi ML arxiviga BIR MARTA yoziladi (probed_at bo'yicha)
+    for p, q in live_quotes.items():
         _save_live_quote(
-            live_quote, user, searcher_key, search_id, region,
+            p, q, user, searcher_key, search_id, region,
             start_lat, start_lng, end_lat, end_lng,
-            primary_route, yandex_formula_prices, wx_boost, wx_reason,
+            primary_route, {}, wx_boost, wx_reason,
         )
 
     # Eng arzon yo'lni belgilash (har xil yo'llar narxi farq qilishi mumkin)
@@ -401,9 +486,14 @@ def aggregate_estimates(
         "current_surge": current_surge(),
         # Yandex narxi telefondan olingan bo'lsa — shu daqiqadagi o'lchov haqida
         "yandex_live": {
-            "probed_at": live_quote.get("probed_at"),
-            "demand": live_quote.get("demand"),
-        } if live_prices else None,
+            "probed_at": live_quotes["yandex"].get("probed_at"),
+            "demand": live_quotes["yandex"].get("demand"),
+        } if live_prices.get("yandex") else None,
+        # Qaysi brendlar narxi telefondan real olingani
+        "live": {
+            p: {"probed_at": q.get("probed_at"), "demand": q.get("demand") or ""}
+            for p, q in live_quotes.items() if live_prices.get(p)
+        },
         # Narx nega shunday — talab sababi (pik / ob-havo) va ob-havo holati
         # MUHIM: Toshkent soati bo'yicha (server UTC bo'lsa 5 soat farq qilardi)
         "surge_reason": _surge_reason(
@@ -417,13 +507,22 @@ def aggregate_estimates(
     }
 
 
-def _save_live_quote(quote, user, searcher_key, search_id, region,
+def _save_live_quote(provider, quote, user, searcher_key, search_id, region,
                      start_lat, start_lng, end_lat, end_lng,
                      route, formula_prices, wx_boost, wx_reason):
-    """Real Yandex o'lchovini ML arxiviga yozish. Xato javobni buzmasin."""
+    """Real o'lchovni ML arxiviga yozish. Xato javobni buzmasin.
+
+    Bir o'lchov (provider + probed_at) bir marta yoziladi — mobil ilovaning
+    15 soniyalik yangilanishlari va keshdan qaytgan javoblar takror yozmaydi.
+    """
     from django.utils.dateparse import parse_datetime
+    probed_at = parse_datetime(quote["probed_at"]) if quote.get("probed_at") else None
     try:
+        if probed_at and LiveYandexQuote.objects.filter(
+                provider=provider, probed_at=probed_at).exists():
+            return
         LiveYandexQuote.objects.create(
+            provider=provider,
             user=user if (user and user.is_authenticated) else None,
             searcher_key=searcher_key or "",
             search_id=search_id,
@@ -437,7 +536,7 @@ def _save_live_quote(quote, user, searcher_key, search_id, region,
             arrival=(quote.get("arrival") or "")[:8],
             tariffs=quote.get("tariffs") or [],
             probe_seconds=quote.get("seconds"),
-            probed_at=parse_datetime(quote["probed_at"]) if quote.get("probed_at") else None,
+            probed_at=probed_at,
             osrm_distance_km=route.get("distance_km"),
             osrm_duration_min=route.get("duration_min"),
             formula_prices=formula_prices,

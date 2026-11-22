@@ -64,9 +64,9 @@ class SiteSettingAdmin(admin.ModelAdmin):
 @admin.register(LiveYandexQuote)
 class LiveYandexQuoteAdmin(admin.ModelAdmin):
     """ML arxivi — faqat ko'rish uchun."""
-    list_display = ("created_at", "from_address", "to_address", "demand", "trip_min",
+    list_display = ("created_at", "provider", "from_address", "to_address", "demand", "trip_min",
                     "osrm_distance_km", "probe_seconds")
-    list_filter = ("demand", "region")
+    list_filter = ("provider", "demand", "region")
     search_fields = ("from_address", "to_address")
     date_hierarchy = "created_at"
 
