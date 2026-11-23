@@ -29,3 +29,6 @@ media/
 
 # Payme hujjatlari (lokal ma'lumotnoma, video katta)
 popka_fayl_pyme/
+
+# Telefon probe servisi (gpuserver) — GitHub ga chiqmasin
+deploy/yandex_probe/

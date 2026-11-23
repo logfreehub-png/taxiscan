@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiPatch } from "@/lib/api/client";
 import { UserSearchHistory } from "./UserSearchHistory";
+import { GrantSubscriptionCard } from "./GrantSubscriptionCard";
 import { Spinner } from "@/components/ui/Spinner";
 import { formatUzs, formatDateTime } from "@/lib/format";
 import {
@@ -268,6 +269,15 @@ export function UserDetail({ id, backHref }: { id: string; backHref: string }) {
             )}
           </div>
         </div>
+      )}
+
+      {/* Tekin obuna berish (adminlarga obuna kerak emas) */}
+      {data.role !== "admin" && (
+        <GrantSubscriptionCard
+          userId={id}
+          userName={data.full_name || data.phone}
+          onGranted={(subscription) => setData((d) => (d ? { ...d, subscription } : d))}
+        />
       )}
 
       {/* Cards */}

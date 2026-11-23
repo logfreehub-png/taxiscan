@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Subscription, Transaction, Card, PromoCode, PromoRedemption
+from .models import Subscription, Transaction, Card, PromoCode, PromoRedemption, SubscriptionGrant
 
 
 @admin.register(Subscription)
@@ -40,3 +40,13 @@ class PromoRedemptionAdmin(admin.ModelAdmin):
     list_filter = ("status", "redeemed_at")
     search_fields = ("user__phone", "promo__code")
     readonly_fields = ("redeemed_at",)
+
+
+@admin.register(SubscriptionGrant)
+class SubscriptionGrantAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "user", "days", "granted_by", "reason", "expires_after")
+    search_fields = ("user__phone", "reason")
+    readonly_fields = [f.name for f in SubscriptionGrant._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
