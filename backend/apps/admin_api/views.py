@@ -469,3 +469,89 @@ class UserSearchHistoryView(APIView):
             for s in DeviceSession.objects.filter(user_id=pk).order_by("-created_at")[:10]
         ]
         return Response({"count": qs.count(), "results": items, "sessions": sessions})
+
+
+class GrantSubscriptionView(APIView):
+    """Foydalanuvchiga tekin obuna berish (admin).
+
+    GET  — shu foydalanuvchiga berilgan tekin obunalar tarixi.
+    POST — {"days": 30, "reason": "...", "notify": true}: obuna muddati uzaytiriladi
+           (hozirgi muddat tugamagan bo'lsa, ustiga qo'shiladi). To'lov yozilmaydi.
+    """
+    permission_classes = [IsAdminRole]
+    MAX_DAYS = 730
+
+    @staticmethod
+    def _grant_json(g):
+        return {
+            "id": g.id,
+            "days": g.days,
+            "reason": g.reason,
+            "granted_by": g.granted_by.full_name or g.granted_by.phone if g.granted_by_id else None,
+            "expires_before": g.expires_before,
+            "expires_after": g.expires_after,
+            "notified": g.notified,
+            "created_at": g.created_at,
+        }
+
+    def get(self, request, pk):
+        from apps.billing.models import SubscriptionGrant
+        user = generics.get_object_or_404(User, pk=pk)
+        grants = SubscriptionGrant.objects.filter(user=user).select_related("granted_by")
+        return Response({"results": [self._grant_json(g) for g in grants]})
+
+    def post(self, request, pk):
+        from django.db import transaction as db_transaction
+        from apps.billing.models import SubscriptionGrant, SubscriptionStatus
+        from .serializers import AdminSubscriptionSerializer
+
+        user = generics.get_object_or_404(User, pk=pk)
+        if user.role == "admin" or user.is_superuser:
+            return Response({"detail": "Adminlarga obuna kerak emas"}, status=400)
+        try:
+            days = int(request.data.get("days"))
+        except (TypeError, ValueError):
+            days = 0
+        if not 1 <= days <= self.MAX_DAYS:
+            return Response({"detail": f"Kun soni 1 dan {self.MAX_DAYS} gacha bo'lishi kerak"},
+                            status=400)
+        reason = str(request.data.get("reason") or "").strip()[:255]
+        notify_user = bool(request.data.get("notify", True))
+
+        now = timezone.now()
+        with db_transaction.atomic():
+            sub = Subscription.objects.select_for_update().filter(user=user).first()
+            if sub is None:
+                sub = Subscription.objects.create(user=user, expires_at=now)
+            before = sub.expires_at
+            # Muddati tugamagan bo'lsa — ustiga qo'shiladi, tugagan bo'lsa — bugundan
+            sub.expires_at = max(sub.expires_at, now) + timedelta(days=days)
+            sub.next_charge_at = sub.expires_at
+            sub.status = SubscriptionStatus.ACTIVE
+            sub.save(update_fields=["expires_at", "next_charge_at", "status"])
+            grant = SubscriptionGrant.objects.create(
+                user=user, days=days, reason=reason, granted_by=request.user,
+                expires_before=before, expires_after=sub.expires_at,
+            )
+
+        if notify_user:
+            try:
+                notif_utils.notify(
+                    user,
+                    title="Sizga tekin obuna berildi 🎁",
+                    preview=f"{days} kunlik obuna — bizdan sovg'a",
+                    body=(f"TaxiScan jamoasi sizga {days} kunlik tekin obuna berdi. "
+                          f"Obunangiz {timezone.localtime(sub.expires_at):%d.%m.%Y} gacha faol. "
+                          "Bizni tanlaganingiz uchun rahmat!"),
+                    kind=NotificationKind.INFO,
+                )
+                grant.notified = True
+                grant.save(update_fields=["notified"])
+            except Exception:  # xabar ketmasa ham obuna berilgan bo'lib qoladi
+                pass
+
+        sub.refresh_from_db()
+        return Response({
+            "subscription": AdminSubscriptionSerializer(sub).data,
+            "grant": self._grant_json(grant),
+        }, status=201)

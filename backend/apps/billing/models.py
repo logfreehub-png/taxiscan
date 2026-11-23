@@ -87,6 +87,35 @@ class Subscription(models.Model):
         self.save()
 
 
+class SubscriptionGrant(models.Model):
+    """Admin bergan tekin obuna — kimga, necha kun, kim bergan, nima uchun.
+
+    To'lov emas: Transaction yaratilmaydi, daromad statistikasiga ta'sir qilmaydi.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="subscription_grants",
+    )
+    days = models.PositiveIntegerField("Kun")
+    reason = models.CharField("Sabab", max_length=255, blank=True)
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+", verbose_name="Kim berdi",
+    )
+    expires_before = models.DateTimeField("Avvalgi tugash sanasi", null=True, blank=True)
+    expires_after = models.DateTimeField("Yangi tugash sanasi")
+    notified = models.BooleanField("Foydalanuvchiga xabar yuborildi", default=False)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "Tekin obuna"
+        verbose_name_plural = "Tekin obunalar"
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"{self.user} — {self.days} kun"
+
+
 class TransactionStatus(models.TextChoices):
     PENDING = "pending", "Kutilmoqda"
     SUCCESS = "success", "Muvaffaqiyatli"

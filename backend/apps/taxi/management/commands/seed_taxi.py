@@ -28,7 +28,10 @@ BRANDS = {
         "name": "Uklon",
         "color": "#00C853",
         "website": "https://uklon.uz",
-        "deeplink_template": "",
+        # App Link (uklon.com.ua ilovaga tasdiqlangan). Sxema katta harfda — mobil
+        # ilova "http..." shablonni tashlab yuboradi, RN esa sxemani kichraytiradi.
+        "deeplink_template": "HTTPS://uklon.com.ua/calculate_cost?"
+                             "latitude_to={end_lat}&longitude_to={end_lng}",
     },
     "fast": {
         "name": "Fasten",
